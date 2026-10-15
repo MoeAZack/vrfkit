@@ -3,11 +3,11 @@ resolver = "3"
 members = ["crates/*", "dev/vrf-testkit", "tools/extract_component_classes"]
 
 [workspace.package]
-version = "0.2.5"
+version = "0.2.6-moe.1"
 edition = "2024"
 rust-version = "1.86"
 license = "Apache-2.0"
-repository = "https://github.com/yakisoba0728/vrfkit"
+repository = "https://github.com/MoeAZack/vrfkit"
 description = "VALORANT replay (.vrf) parser and analysis toolkit"
 
 [workspace.dependencies]
