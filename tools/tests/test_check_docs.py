@@ -358,7 +358,7 @@ class MeasurementFailureTests(unittest.TestCase):
         counts = guard.measured_counts(problems)
         self.assertEqual(set(counts), set(guard.MEASURED_RE))
         self.assertEqual(problems, [])
-        self.assertEqual(counts["golden"], 88)
+        self.assertEqual(counts["golden"], 99)
         self.assertGreater(counts["metrics_builds"], 0)
 
     def test_a_failed_measurement_is_reported_rather_than_skipped(self):
