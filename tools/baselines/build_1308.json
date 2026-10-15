@@ -1,0 +1,33 @@
+{
+ "corpus": "13.08",
+ "branches": {
+  "++Ares-Core+release-13.08": 2
+ },
+ "totals": {
+  "blocks": 1781493,
+  "fields": 1249036,
+  "rpcs": 1007204,
+  "malformed": 0,
+  "skipped": 12934401
+ },
+ "per_file": {
+  "sample-1.vrf": {
+   "branch": "++Ares-Core+release-13.08",
+   "rate": "100.000000",
+   "blocks": 775072,
+   "fields": 569321,
+   "rpcs": 420946,
+   "malformed": 0,
+   "skipped": 6756920
+  },
+  "sample-2.vrf": {
+   "branch": "++Ares-Core+release-13.08",
+   "rate": "100.000000",
+   "blocks": 1006421,
+   "fields": 679715,
+   "rpcs": 586258,
+   "malformed": 0,
+   "skipped": 6177481
+  }
+ }
+}

@@ -1,5 +1,5 @@
 // Golden payload-transform vectors, extracted from the C# reference parser's
-// test fixture; do not edit. 8 builds x the 11 bit counts in `BOUNDARIES`
+// test fixture; do not edit. 9 builds x the 11 bit counts in `BOUNDARIES`
 // (tests/golden.rs).
 
 /// The shared plaintext payload every vector transforms.
@@ -9,7 +9,7 @@ pub const PAYLOAD_HEX: &str = "BFDF6F9EA1F27BA00000C66EAFAF2E0000339C0DD34B0C45C
 pub const ACTOR_NET_GUID: u32 = 2;
 
 /// `(branch, bit_count, expected_output_hex)`
-pub const VECTORS: [(&str, usize, &str); 88] = [
+pub const VECTORS: [(&str, usize, &str); 99] = [
     ("++Ares-Core+release-12.10", 0, ""),
     ("++Ares-Core+release-12.10", 1, "01"),
     ("++Ares-Core+release-12.10", 7, "5F"),
@@ -98,4 +98,15 @@ pub const VECTORS: [(&str, usize, &str); 88] = [
     ("++Ares-Core+release-13.06", 65, "DFC9BE07A989BFEE00"),
     ("++Ares-Core+release-13.06", 287, "0AC9BEEAA93FA5EE74889B6D70458BE650E16FB5DE5EC1EF39F3B824CD43CD8E275E6451"),
     ("++Ares-Core+release-13.06", 288, "56C9BE0CA93F0BEE658E139847845307691928301673FB2B927F6E5ED1F9DEA83361858D"),
+    ("++Ares-Core+release-13.08", 0, ""),
+    ("++Ares-Core+release-13.08", 1, "00"),
+    ("++Ares-Core+release-13.08", 7, "40"),
+    ("++Ares-Core+release-13.08", 8, "80"),
+    ("++Ares-Core+release-13.08", 31, "3514107E"),
+    ("++Ares-Core+release-13.08", 32, "FCE6D27C"),
+    ("++Ares-Core+release-13.08", 63, "AACB1D3BFE8B6B10"),
+    ("++Ares-Core+release-13.08", 64, "29FB1FEE2E5A5FBF"),
+    ("++Ares-Core+release-13.08", 65, "7E8AB6B0AD92F14F00"),
+    ("++Ares-Core+release-13.08", 287, "1FEE335A39DA29B773FED1DF6DCD7519C180BAA20B6F5B3045DC6EDC088C26A906195007"),
+    ("++Ares-Core+release-13.08", 288, "24E3E8FA9A9B3C1367196C6CEC3A9F25701BBC89558813AB5BBDD9A6864A07AF1919D37C"),
 ];

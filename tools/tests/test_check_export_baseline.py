@@ -338,6 +338,15 @@ class CheckpointGuidCrossCheckTests(TempDirTestCase):
         counts, errors = self.crosscheck(encode_guid_entries(), main)
         self.assert_rejected(counts, errors, literal_path_differs=1, indexed_path_differs=0)
 
+    def test_fname_case_only_path_difference_is_counted_and_accepted(self):
+        main = dict(MAIN_GUIDS)
+        main[9] = (main[9][0].swapcase(), main[9][1])
+        counts, errors = self.crosscheck(encode_guid_entries(), main)
+        self.assertEqual(errors, [])
+        self.assertEqual(counts["indexed_path_equal"], 4)
+        self.assertEqual(counts["indexed_path_case_differs"], 1)
+        self.assertEqual(counts["indexed_path_differs"], 0)
+
     def test_an_index_past_the_preceding_literals_is_counted_not_raised(self):
         rows = encode_guid_entries()
         rows[4]["name_index"] = 99

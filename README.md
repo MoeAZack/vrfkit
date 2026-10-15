@@ -8,22 +8,22 @@ there is no `unsafe` block anywhere in the workspace. The only native FFI the
 parser depends on is Oodle decompression, and that lives entirely in the
 external `oozextract` crate. Edition 2024, MSRV 1.86, Apache-2.0.
 
-![CI](https://github.com/yakisoba0728/vrfkit/actions/workflows/ci.yml/badge.svg)
+![CI](https://github.com/MoeAZack/vrfkit/actions/workflows/ci.yml/badge.svg)
 ![license](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![rust](https://img.shields.io/badge/rust-1.86%2B-orange.svg)
 ![edition](https://img.shields.io/badge/edition-2024-orange.svg)
-![builds](https://img.shields.io/badge/builds-11.06--13.06-green.svg)
+![builds](https://img.shields.io/badge/builds-11.06--13.08-green.svg)
 ![unsafe](https://img.shields.io/badge/unsafe-none-success.svg)
 
 Derived from [ValorantReplayParser](https://github.com/michel-giehl/ValorantReplayParser)
 (MIT), last referenced at
-[`2e4d3ad`](https://github.com/michel-giehl/ValorantReplayParser/commit/2e4d3aded2e892cda21e0a66c4b55c73b3b7a07f)
-(2026-09-30); see [`NOTICE.md`](NOTICE.md). Not affiliated with, endorsed by,
+[`e86ec40`](https://github.com/michel-giehl/ValorantReplayParser/commit/e86ec408f2b89ea7ddca88ffae03113781d7c482)
+(2026-10-14); see [`NOTICE.md`](NOTICE.md). Not affiliated with, endorsed by,
 or approved by Riot Games.
 
 **Verified state (2026-09-30):** Rust has **708 passing** tests; Python has
-**1045 passing** tests. All 24 supported builds received the same verification
-on **1,018 unique replays**; all **1,018** meet every strict criterion. See
+**1046 passing** tests. All 25 supported builds received the same verification
+on **1,020 unique replays**; all **1,020** meet every strict criterion. See
 [build verification](docs/BUILD_VERIFICATION.md) for the measured scope, common
 checks and remaining limits.
 
@@ -49,6 +49,7 @@ can be represented by their rows instead of a duplicate raw RPC.
 
 | 🎮 Build | 🌿 Branch | ✅ Clean/checked | 🔎 Verified by |
 |---|---|---:|---|
+| **13.08** | `release-13.08` | 2/2 | Validation + checkpoints + typed/raw |
 | **13.06** | `release-13.06` | 38/38 | Validation + checkpoints + typed/raw |
 | **13.05** | `release-13.05` | 401/401 | Validation + checkpoints + typed/raw |
 | **13.04** | `release-13.04` | 108/108 | Validation + checkpoints + typed/raw |
@@ -74,11 +75,11 @@ can be represented by their rows instead of a duplicate raw RPC.
 | **11.07** | `release-11.07` | 3/3 | Validation + checkpoints + typed/raw |
 | **11.06** | `release-11.06` | 3/3 | Validation + checkpoints + typed/raw |
 
-Measured on all **1,018 unique available replays** across the 24
+Measured on all **1,020 unique available replays** across the 25
 supported branches, every row by the [same acceptance rule](docs/BUILD_VERIFICATION.md):
 ReplayData validation, checkpoint-enabled export, the independent comparisons on
 observed evidence fields, and the strict array and array-leaf error counters.
-✅ **1,018/1,018** are clean -- not a claim that every field is understood.
+✅ **1,020/1,020** are clean -- not a claim that every field is understood.
 Structured-array child rows are admitted per build and per route: all
 measured routes on 13.01--13.06, a measured subset on 11.06--13.00
 ([legacy route table](docs/LEGACY_BUILD_SUPPORT.md#measured-array-routes)).
@@ -179,7 +180,7 @@ timestamp) are in [`docs/USAGE.md` section 3](docs/USAGE.md#3-output).
 ## Status
 
 Work in progress. Currently verified: `cargo +1.86.0 test --workspace --locked`
-**708 passing**; the full Python suite also has **1045 passing** tests. The
+**708 passing**; the full Python suite also has **1046 passing** tests. The
 full documentation check passes. The latest [common build audit](docs/BUILD_VERIFICATION.md)
 records replay validation, checkpoint export and independent value checks for
 each supported build.
@@ -235,7 +236,7 @@ original is always left intact in `raw_payload`.
 ## Whole-corpus robustness
 
 The [common audit](docs/BUILD_VERIFICATION.md) checks 1,018 unique replays
-across 24 builds: every ReplayData validation and checkpoint export succeeds,
+across 25 builds: every ReplayData validation and checkpoint export succeeds,
 independent typed/raw comparisons match 13,387,751 observed values, and all
 1,018 pass the strict quality gate.
 
@@ -301,7 +302,7 @@ prints no overlay counters.
 ## Supported builds and the cost of a new build
 
 The payload transform changes per game build, but far more is **constant**
-across supported releases 11.06 through 13.06: the PRNG and its multipliers, the seed-mix
+across supported releases 11.06 through 13.08: the PRNG and its multipliers, the seed-mix
 skeleton, the 64 -> 32 -> 8 -> tail staging, the tail-XOR handling, and even
 the S-box table itself. Each build supplies its own `word64` / `word32` /
 `byte` operation sequence (order, rotations, complements, and whether the
@@ -333,8 +334,9 @@ S-box stage is used) plus these constants:
 | release-13.04 | `0x076dc658` | `0x28` | - | unused |
 | release-13.05 | `0x48c26613` | `0x13` | **+** | unused |
 | release-13.06 | `0xe974593c` | `0x3c` | **+** | used |
+| release-13.08 | `0x3c17a9fa` | `0x06` | - | used |
 
-In all twenty-four supported builds the **tail-XOR byte equals the low byte of the seed
+In all twenty-five supported builds the **tail-XOR byte equals the low byte of the seed
 addend.** It is a derived value, not an independent constant: `SeededTransform`
 in `crates/vrf-transform/src/lib.rs` defaults `TAIL_XOR` to `SEED_ADDEND as
 u8`, and a build that broke the pattern would fail its 1- and 7-bit vectors,
@@ -347,11 +349,12 @@ word64 / word32 / byte stages; everything else is shared.
 
 Every build in the table above is confirmed on live replays, not only by
 transform vectors. A machine-local corpus can rotate; the reproducible oracle is
-88 mechanically extracted golden vectors (11 staging boundaries per
-build, eight builds) plus 1,264 native-machine-code vectors for the sixteen
+99 mechanically extracted golden vectors (11 staging boundaries per
+build, nine builds) plus 1,264 native-machine-code vectors for the sixteen
 recovered 11.06--12.09 builds, with a full 48-sample main/checkpoint validation
 ([build support validation report](docs/LEGACY_BUILD_SUPPORT.md)). The
-[common audit](docs/BUILD_VERIFICATION.md) checks 38 13.06 replays.
+[build verification](docs/BUILD_VERIFICATION.md) checks 38 13.06 and 2 13.08
+replays.
 
 The 768-byte S-box is shared across builds, which makes it usable as a
 **signature for locating the transform function in a binary.**

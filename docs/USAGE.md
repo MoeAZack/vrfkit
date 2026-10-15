@@ -672,7 +672,7 @@ Take only the layer you need. Every crate is `#![forbid(unsafe_code)]`, and
 | Layer | Crate | Feature flags |
 |---|---|---|
 | Bit reader / UE wire format | `vrf-bitio` | `alloc` (default; drop it for `no_std`) |
-| Payload transform (24 builds) | `vrf-transform` | none |
+| Payload transform (25 builds) | `vrf-transform` | none |
 | Container (info/header/chunk/event/checkpoint, Oodle) | `vrf-container` | `oodle` `event` `checkpoint` |
 | DemoFrame traversal | `vrf-frame` | none |
 | Dynamic schema + GUID cache + checkpoint tables | `vrf-schema` | `checkpoint` |
@@ -997,7 +997,7 @@ per-class level itself is pinned by the Rust test
 The shipped `tools/fixtures/type_evidence.json` covers the `ADDITIONS` and
 the checksum-scoped wire entries of the table, one entry per exported group
 that carries each; they were checked on every row of the 1,018-replay audit
-exports and with `--compare-typed` on fresh exports of all 24 builds. The last
+exports and with `--compare-typed` on fresh exports of all 25 builds. The last
 seven entries are the bomb-objective and ult-orb RPC parameters
 (`BombPlantedRPC.BombPlanter` / `PlantSite`, `BombDefusedRPC.DefusingCharacter`,
 `OrbPickedUpRPC.Orb Gatherer` / `Collectable Orb` on the Bomb and Swiftplay game
@@ -1103,7 +1103,7 @@ schema drift, not meaning.
 
 The pre-PR sweep, and what CI runs, is in
 [CONTRIBUTING.md](../CONTRIBUTING.md#before-you-open-a-pr); the suites have
-708 Rust tests and 1045 Python tests.
+708 Rust tests and 1046 Python tests.
 
 **The ASCII rule is correctness, not style.** The Windows console is cp949, so a
 single non-ASCII character in a format string truncates output at that point.

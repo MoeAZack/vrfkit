@@ -138,7 +138,8 @@ impl MeasuredArrayRoutes {
             | "++Ares-Core+release-13.02"
             | "++Ares-Core+release-13.04"
             | "++Ares-Core+release-13.05"
-            | "++Ares-Core+release-13.06" => Self::ALL,
+            | "++Ares-Core+release-13.06"
+            | "++Ares-Core+release-13.08" => Self::ALL,
             _ => Self::NONE,
         }
     }
@@ -236,6 +237,7 @@ mod tests {
         ("++Ares-Core+release-13.04", ALL),
         ("++Ares-Core+release-13.05", ALL),
         ("++Ares-Core+release-13.06", ALL),
+        ("++Ares-Core+release-13.08", ALL),
     ];
 
     #[test]
