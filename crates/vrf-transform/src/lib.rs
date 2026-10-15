@@ -5,7 +5,7 @@
 //! each block's transform is independent of the others. The key comes from the stream:
 //! `seed = (bit_count as u32) ^ actor_net_guid` ([`seed_for`]).
 //!
-//! The skeleton is shared from release-11.06 to release-13.06; a build is one
+//! The skeleton is shared from release-11.06 to release-13.08; a build is one
 //! line of the `transforms!` registry at the end of this file.
 //!
 //! # Example
@@ -52,7 +52,7 @@ pub trait SeededTransform {
     /// Whether the offset is added (`true`) or subtracted (`false`).
     const ADD_OFFSET: bool = false;
     /// XORed into the final partial byte alongside the keystream byte. Equals
-    /// `SEED_ADDEND as u8` in all 24 builds; a build that broke that would
+    /// `SEED_ADDEND as u8` in all 25 builds; a build that broke that would
     /// fail its 1- and 7-bit vectors.
     const TAIL_XOR: u8 = Self::SEED_ADDEND as u8;
 
@@ -326,6 +326,7 @@ transforms! {
     V1304 V13_04 "13.04" 0x076d_c658 -0x28: rotr 7, xor 6, sub 5, swap, add 3, add 2, rotl 1;
     V1305 V13_05 "13.05" 0x48c2_6613  0x13: xor 8, sub 7, rotl 6, sub 5, xor 4, xor 3, rotl 2, rotl 1;
     V1306 V13_06 "13.06" 0xe974_593c  0x3c: swap, xor 7, swap, rev, sbox, not, add 2, sbox;
+    V1308 V13_08 "13.08" 0x3c17_a9fa -0x06: add 8, rev, rotl 6, sbox, rotr 4, sbox, sbox, rev;
 }
 
 #[cfg(test)]

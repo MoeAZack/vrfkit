@@ -64,7 +64,10 @@ GENERATED_INVENTORY_DOCS = (
 #: Named in the docs but not shipped here.
 EXTERNAL_SCRIPTS = {"compute_metrics.py", "python_interop.py"}
 
-BUILD_AUDIT = REPO / "tools/fixtures/build_verification.json"
+BUILD_AUDITS = (
+    REPO / "tools/fixtures/build_verification.json",
+    REPO / "tools/fixtures/build_verification_1308.json",
+)
 BUILD_METHOD = "Validation + checkpoints + typed/raw"
 
 LINK_RE = re.compile(r"\[`?([^\]]+?)`?\]\(([^)]+)\)")
@@ -73,6 +76,22 @@ SCRIPT_RE = re.compile(r"`?([a-z_][a-z0-9_]*\.py)`?")
 
 def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
+
+
+def merged_build_audits() -> dict:
+    """Combine independently recorded build audits without hiding overlap."""
+    merged = {"builds": {}, "executable_changed": False, "build_errors": []}
+    for path in BUILD_AUDITS:
+        report = json.loads(read(path))
+        overlap = set(merged["builds"]) & set(report.get("builds", {}))
+        if overlap:
+            merged["build_errors"].append(
+                f"duplicate builds across audit reports: {', '.join(sorted(overlap))}"
+            )
+        merged["builds"].update(report.get("builds", {}))
+        merged["executable_changed"] |= report.get("executable_changed") is not False
+        merged["build_errors"].extend(report.get("build_errors", []))
+    return merged
 
 
 def check_build_verification(readme: str, usage: str, registry: str, report: dict) -> list[str]:
@@ -779,7 +798,7 @@ def main() -> int:
         [p for path in link_checked_docs() for p in check_links(path, read(path))],
         check_build_verification(
             readme, usage, read(REPO / "crates/vrf-transform/src/lib.rs"),
-            json.loads(read(BUILD_AUDIT))),
+            merged_build_audits()),
         anchor_problems(anchors_checked),
     ]
 

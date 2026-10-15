@@ -62,16 +62,23 @@ the two sources for one export:
 3. Join every entry, literal or indexed, to `net_guids.parquet` by `net_guid`.
    A repeated main-stream `net_guid` fails the check. An entry whose GUID the
    main stream never declared is counted as unjoined and not compared.
-4. Compare the path, and the outer GUID under an explicit rule: a checkpoint
-   outer of 0 must meet a null main outer, and any other value must meet the
-   same main value. A null is never read as 0, so a main table that started
-   writing 0 would fail.
+4. Compare the path using Unreal FName identity (case-insensitive), while
+   counting case-only spelling differences separately. Compare the outer GUID
+   under an explicit rule: a checkpoint outer of 0 must meet a null main outer,
+   and any other value must meet the same main value. A null is never read as
+   0, so a main table that started writing 0 would fail.
 
 The check fails on any path or outer difference, on an index past the
 preceding literals, and when no indexed entry joined at all. It prints every
 count, zeros included. `check_export_baseline.py --checkpoints` runs it after
 the export and exits non-zero on failure; `verify_build_corpus.py` runs it on
 every export and reports the counts per build as `guid_crosscheck_*`.
+
+The case-only count is not silent tolerance. A 13.08 replay declared `Sphere`
+in 18 checkpoint snapshots and `sphere` in the main stream for the same GUID
+and outer GUID. Unreal FName identity is case-insensitive, so those rows join,
+but `indexed_path_case_differs` keeps the spelling drift visible. Any other
+path difference still fails the audit.
 
 On all 1,018 exports of the common audit (every unique replay of the 24
 builds, `--checkpoints`), the check and a separately written rebuild agreed on

@@ -86,7 +86,7 @@ fn extracted_tables_are_intact() {
         sorted.sort_unstable();
         assert!(sorted.iter().copied().eq(0..=255), "{sbox:?}");
     }
-    // The golden vectors are 8 builds x BOUNDARIES, each pair exactly once.
+    // The golden vectors are 9 builds x BOUNDARIES, each pair exactly once.
     let mut pairs: Vec<(&str, usize)> = VECTORS.iter().map(|v| (v.0, v.1)).collect();
     pairs.sort_unstable();
     let mut builds: Vec<&str> = pairs.iter().map(|p| p.0).collect();
@@ -95,6 +95,6 @@ fn extracted_tables_are_intact() {
         .iter()
         .flat_map(|&b| BOUNDARIES.map(|bits| (b, bits)))
         .collect();
-    assert_eq!(builds.len(), 8, "{builds:?}");
+    assert_eq!(builds.len(), 9, "{builds:?}");
     assert_eq!(pairs, expected);
 }

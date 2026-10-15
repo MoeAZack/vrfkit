@@ -178,14 +178,17 @@ GUID_ENTRY_COLUMNS = ("checkpoint_index", "ordinal", "net_guid", "outer_net_guid
 MAIN_GUID_COLUMNS = ("net_guid", "path", "outer_net_guid")
 
 #: Every count `checkpoint_guid_crosscheck` returns, in print order, zeros
-#: included. Per kind, joined = path_equal + path_differs = outer_equal +
-#: outer_value_differs + outer_presence_differs; indexed entries are joined,
-#: unjoined or unresolved.
+#: included. Per kind, joined = path_equal + path_case_differs + path_differs
+#: = outer_equal + outer_value_differs + outer_presence_differs; indexed
+#: entries are joined, unjoined or unresolved. Unreal FName identity is
+#: case-insensitive, but spelling drift remains visible as its own count.
 GUID_CROSSCHECK_KEYS = (
-    "indexed_joined", "indexed_path_equal", "indexed_path_differs",
+    "indexed_joined", "indexed_path_equal", "indexed_path_case_differs",
+    "indexed_path_differs",
     "indexed_unresolved", "indexed_outer_equal", "indexed_outer_value_differs",
     "indexed_outer_presence_differs", "indexed_unjoined",
-    "literal_joined", "literal_path_equal", "literal_path_differs",
+    "literal_joined", "literal_path_equal", "literal_path_case_differs",
+    "literal_path_differs",
     "literal_outer_equal", "literal_outer_value_differs",
     "literal_outer_presence_differs", "literal_unjoined",
     "main_duplicate_guids", "malformed_entries", "ordinal_errors",
@@ -307,6 +310,8 @@ def checkpoint_guid_crosscheck(out_dir: Path) -> tuple[dict, list[str]]:
         main_path, main_outer = main_rows[guid]
         if path == main_path:
             counts[f"{kind}_path_equal"] += 1
+        elif path.casefold() == main_path.casefold():
+            counts[f"{kind}_path_case_differs"] += 1
         else:
             counts[f"{kind}_path_differs"] += 1
             note(f"{kind}_path_differs", row, f"checkpoint {path!r}, main {main_path!r}")
