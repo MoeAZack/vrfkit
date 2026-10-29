@@ -137,7 +137,8 @@ def build_with_tally(out_dir: Path) -> tuple[list[dict], dict]:
     if not actors_path.exists():
         raise SystemExit(f"no actors.parquet in {out_dir} -- run `vrfkit export` first")
 
-    table = pq.read_table(actors_path)
+    with pq.ParquetFile(actors_path, pre_buffer=False) as source:
+        table = source.read()
     cols = {c: table.column(c).to_pylist() for c in table.column_names}
     guid = cols["actor_net_guid"]
     event = cols["event"]

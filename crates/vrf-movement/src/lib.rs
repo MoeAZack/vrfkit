@@ -104,3 +104,6 @@ pub use types::{MovementMove, MovementUpdate, RpcDecodeResult};
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod boundary_tests;

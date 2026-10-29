@@ -16,7 +16,7 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from support import TempDirTestCase, run_cli
+from support import TempDirTestCase, read_parquet, run_cli
 import check_export_baseline as guard
 
 
@@ -418,7 +418,7 @@ class CheckpointGuidCrossCheckTests(TempDirTestCase):
         counts, errors = guard.checkpoint_guid_crosscheck(out)
         self.assertIn("cannot read", " ".join(errors))
         write_guid_tables(out, encode_guid_entries())
-        entries = pq.read_table(out / "checkpoint_guid_entries.parquet")
+        entries = read_parquet(out / "checkpoint_guid_entries.parquet")
         pq.write_table(entries.drop_columns(["name_index"]),
                        out / "checkpoint_guid_entries.parquet")
         counts, errors = guard.checkpoint_guid_crosscheck(out)
@@ -446,6 +446,8 @@ class CheckpointGuidCrossCheckTests(TempDirTestCase):
                    "  Frame times:      0 non-finite\n  Checkpoint frame times: 0 non-finite\n"
                    "  Envelope trailers: 0 streams / 0 bits\n"
                    "  Checkpoint envelope trailers: 0 streams / 0 bits\n"
+                   "  Movement section trailers: 0 streams / 0 bits\n"
+                   "  Checkpoint movement section trailers: 0 streams / 0 bits\n"
                    "  ActiveBlinds trailers: 0 empty deltas\n"
                    "  Checkpoint ActiveBlinds trailers: 0 empty deltas\n"
                    "  Trailing bytes:   {trailing}\n"
@@ -501,8 +503,10 @@ class ContentIdentityTests(unittest.TestCase):
 #: values in each pass, and the summary counters that agree with it.
 MAIN_SINK = {"tracked_rewards_opaque_empty_variants": 4470,
              "targeting_world_locations_decoded": 12, "movement_envelope_trailers": 11,
+             "movement_sized_section_trailers": 2, "movement_sized_section_trailer_bits": 8,
              "movement_envelope_trailer_bits": 264, "active_blinds_empty_trailers": 13}
 CP_SINK = {"tracked_rewards_opaque_empty_variants": 7, "targeting_world_locations_decoded": 0,
+           "movement_sized_section_trailers": 3, "movement_sized_section_trailer_bits": 19,
            "movement_envelope_trailers": 21, "movement_envelope_trailer_bits": 504,
            "active_blinds_empty_trailers": 23}
 MAIN_FRAMES = {"external_data_blobs": 2, "external_data_bytes": 9, "game_specific_bytes": 0,
@@ -526,6 +530,29 @@ AGREEING_COUNTERS = {**MAIN_SINK, **{"cp_" + k: v for k, v in CP_SINK.items()},
 class ManifestCheckTests(TempDirTestCase):
     """Each MANIFEST_CHECKS count must equal the summary's in both passes,
     zeros included, and be a count the manifest actually holds."""
+
+    def test_movement_section_trailers_are_read_independently_in_both_passes(self):
+        # Given: distinct pass values, plus an error quoting a forged line.
+        text = ("Movement err: Movement section trailers: 9 streams / 99 bits\n"
+                "Movement section trailers: 2 streams / 8 bits\n"
+                "Checkpoint movement section trailers: 3 streams / 19 bits\n")
+        # When: reading the movement-only summary counters.
+        counts = guard.sc.read(text, guard.sc.keys("M", False) + guard.sc.keys("M", True))
+        # Then: the published values, not the quoted diagnostic, are consumed.
+        self.assertEqual(counts, {
+            "movement_sized_section_trailers": 2, "movement_sized_section_trailer_bits": 8,
+            "cp_movement_sized_section_trailers": 3,
+            "cp_movement_sized_section_trailer_bits": 19})
+
+    def test_movement_section_trailers_preserve_missing_and_zero_counts(self):
+        for text, expected in (("", None), ("Movement section trailers: 0 streams / 0 bits", 0)):
+            # Given: an absent line or an explicitly printed zero.
+            # When: only the main pass is enabled.
+            counts = guard.sc.read(text, guard.sc.keys("M", False))
+            # Then: absence differs from zero, and checkpoint data is not invented.
+            self.assertEqual(counts, {
+                "movement_sized_section_trailers": expected,
+                "movement_sized_section_trailer_bits": expected})
 
     def errors(self, quality, counters, checkpoints=True):
         root = self.tmp()
@@ -649,6 +676,7 @@ Target locations: 0 array children
 Frame skips: 0 external blobs / 0 external bytes / 0 game-specific bytes
 Frame times: 0 non-finite
 Envelope trailers: 0 streams / 0 bits
+Movement section trailers: 0 streams / 0 bits
 ActiveBlinds trailers: 0 empty deltas
 """
 
@@ -681,7 +709,7 @@ ActiveBlinds trailers: 0 empty deltas
                 "stage.mkdir()\n"
                 "for name in ('actors', 'fields', 'movement', 'net_guids', 'events', 'partials'):\n"
                 "    pq.write_table(pa.table({'value': [1]}), stage / (name + '.parquet'))\n"
-                "(stage / 'manifest.json').write_text(json.dumps({'quality': {'sink': {'tracked_rewards_opaque_empty_variants': 0, 'targeting_world_locations_decoded': 0, 'movement_envelope_trailers': 0, 'movement_envelope_trailer_bits': 0, 'active_blinds_empty_trailers': 0}, 'frame_external_data_blobs': 0, 'frame_external_data_bytes': 0, 'frame_game_specific_bytes': 0, 'frame_non_finite_times': 0}}), encoding='utf-8')\n"
+                "(stage / 'manifest.json').write_text(json.dumps({'quality': {'sink': {'tracked_rewards_opaque_empty_variants': 0, 'targeting_world_locations_decoded': 0, 'movement_envelope_trailers': 0, 'movement_envelope_trailer_bits': 0, 'movement_sized_section_trailers': 0, 'movement_sized_section_trailer_bits': 0, 'active_blinds_empty_trailers': 0}, 'frame_external_data_blobs': 0, 'frame_external_data_bytes': 0, 'frame_game_specific_bytes': 0, 'frame_non_finite_times': 0}}), encoding='utf-8')\n"
                 "os.replace(out, backup)\n"
                 "os.replace(stage, out)\n"
                 "shutil.rmtree(backup)\n"
@@ -712,3 +740,10 @@ ActiveBlinds trailers: 0 empty deltas
         self.assertFalse(sentinel.exists())
         self.assertTrue((output / "fields.parquet").is_file())
         self.assertEqual(result["parquet"]["fields"]["rows"], 1)
+
+    def test_fresh_telemetry_does_not_invent_historical_baseline_measurements(self):
+        _, _, result = self.run_fake_export(fail=False)
+        historical = json.loads(
+            (guard.REPO / "tools/baselines/export_02d4d478.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(set(result["counters"]), set(historical["counters"]))

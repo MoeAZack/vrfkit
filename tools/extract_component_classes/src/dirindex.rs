@@ -3,6 +3,8 @@
 //! linked by index (first child / next sibling, first file / next file), a
 //! file's user data is its TOC entry, and `u32::MAX` ends a list or means no name.
 
+use std::collections::HashSet;
+
 use crate::reader::{Cursor, Result, fail};
 
 const NONE: u32 = u32::MAX;
@@ -84,14 +86,14 @@ impl DirectoryIndex {
 
     /// Every file as `(mount point + path, TOC entry index)`, in index order.
     ///
-    /// A link that points outside its table, or a walk that visits more
-    /// entries than exist (a cycle), is an error: the listing would otherwise
-    /// be silently short or endless.
+    /// Out-of-range links, cycles, repeated file identities and unreachable
+    /// files are errors: the listing would otherwise be incomplete or endless.
     pub fn files(&self) -> Result<Vec<(String, u32)>> {
         let mut out = Vec::with_capacity(self.files.len());
-        if self.dirs.is_empty() {
+        if self.dirs.is_empty() && self.files.is_empty() {
             return Ok(out);
         }
+        let mut files_seen = HashSet::with_capacity(self.files.len());
         let mut dirs_seen = 0usize;
         let mut stack: Vec<(u32, String)> = vec![(0, self.mount_point.clone())];
         while let Some((d, prefix)) = stack.pop() {
@@ -105,13 +107,13 @@ impl DirectoryIndex {
             };
             let mut f = dir.first_file;
             while f != NONE {
-                if out.len() >= self.files.len() {
-                    return fail("directory index: file links form a cycle");
-                }
                 let file = match self.files.get(f as usize) {
                     Some(e) => *e,
                     None => return fail(format!("directory index: file {f} out of range")),
                 };
+                if !files_seen.insert(f) {
+                    return fail(format!("directory index: file {f} visited more than once"));
+                }
                 out.push((format!("{prefix}{}", self.name(file.name)?), file.user_data));
                 f = file.next_file;
             }
@@ -251,5 +253,78 @@ pub(crate) mod tests {
         );
         let idx = parse_directory_index(&bytes).unwrap();
         assert!(idx.files().unwrap_err().0.contains("1 of 2"));
+    }
+
+    #[test]
+    fn duplicate_file_visits_cannot_balance_an_unreachable_file() {
+        // Given the recorded two-directory shape with both naming file 0.
+        let bytes = build_index(
+            "/",
+            &[(NONE, 1, NONE, 0), (0, NONE, NONE, 0)],
+            &[(1, NONE, 0), (2, NONE, 1)],
+            &["Sub", "a.uasset", "b.uasset"],
+        );
+        let idx = parse_directory_index(&bytes).unwrap();
+        // When walking the listing.
+        let result = idx.files();
+        // Then visiting file 0 twice cannot conceal unreachable file 1.
+        assert!(result.is_err(), "{result:?}");
+    }
+
+    #[test]
+    fn distinct_file_entries_can_share_a_name_and_toc_entry() {
+        // Given distinct file identities with identical names and user data.
+        let bytes = build_index(
+            "/",
+            &[(NONE, 1, NONE, 0), (0, NONE, NONE, 1)],
+            &[(1, NONE, 7), (1, NONE, 7)],
+            &["Sub", "a.uasset"],
+        );
+        let idx = parse_directory_index(&bytes).unwrap();
+        // When walking the complete listing.
+        let files = idx.files().unwrap();
+        // Then identity is the file-table index, not its name or TOC entry.
+        assert_eq!(
+            files,
+            [("/a.uasset".to_owned(), 7), ("/Sub/a.uasset".to_owned(), 7)]
+        );
+    }
+
+    #[test]
+    fn directory_and_sibling_cycles_are_rejected() {
+        // Given a child cycle or a sibling cycle, without any file entries.
+        for dirs in [
+            [(NONE, 1, NONE, NONE), (0, 1, NONE, NONE)],
+            [(NONE, 1, NONE, NONE), (0, NONE, 1, NONE)],
+        ] {
+            let bytes = build_index("/", &dirs, &[], &["Sub"]);
+            let idx = parse_directory_index(&bytes).unwrap();
+            // When walking either directory graph.
+            let result = idx.files();
+            // Then traversal terminates with an error.
+            assert!(result.is_err());
+        }
+    }
+
+    #[test]
+    fn files_without_any_directory_are_unreachable() {
+        // Given a file table with no directory from which to reach it.
+        let bytes = build_index("/", &[], &[(0, NONE, 0)], &["a.uasset"]);
+        let idx = parse_directory_index(&bytes).unwrap();
+        // When walking the listing.
+        let result = idx.files();
+        // Then the nonempty file table cannot produce a complete empty listing.
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn empty_directory_and_file_tables_have_an_empty_listing() {
+        // Given a genuinely empty index.
+        let bytes = build_index("/", &[], &[], &[]);
+        let idx = parse_directory_index(&bytes).unwrap();
+        // When walking the listing.
+        let files = idx.files().unwrap();
+        // Then an empty listing is complete.
+        assert!(files.is_empty());
     }
 }

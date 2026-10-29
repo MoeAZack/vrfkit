@@ -29,7 +29,9 @@ ROUTES = tuple(f"route_children_{name}" for name in (
 
 #: Who reads a line. P: check_export_baseline.py pins every key (the committed
 #: `*_02d4d478.json` hold exactly these). G: check_decode_errors_corpus.py
-#: gates on it. `cp_` keys are the `=== Checkpoints ===` block, printed only
+#: gates on it. M: fresh movement-boundary measurements, validated and printed
+#: without inventing values in historical baselines. `cp_` keys are the
+#: `=== Checkpoints ===` block, printed only
 #: under `--checkpoints`, so a default run never reads them.
 LINES = (
     ("Chunks: {}", "chunks", "P"),
@@ -65,6 +67,8 @@ LINES = (
     ("Movement tails: {} sized ({} bits) / {} open ({} bits)",
      "movement_sized_section_tails movement_sized_section_tail_bits "
      "movement_open_section_tails movement_open_section_tail_bits", "PG"),
+    ("Movement section trailers: {} streams / {} bits",
+     "movement_sized_section_trailers movement_sized_section_trailer_bits", "GM"),
     # Bits after each byte-wrapped movement envelope, which nothing reads:
     # verify_build_corpus.py fails a replay whose bits are not 24 per stream.
     ("Envelope trailers: {} streams / {} bits",
@@ -142,6 +146,8 @@ LINES = (
     ("Checkpoint movement tails: {} sized ({} bits) / {} open ({} bits)",
      "cp_movement_sized_section_tails cp_movement_sized_section_tail_bits "
      "cp_movement_open_section_tails cp_movement_open_section_tail_bits", "PG"),
+    ("Checkpoint movement section trailers: {} streams / {} bits",
+     "cp_movement_sized_section_trailers cp_movement_sized_section_trailer_bits", "GM"),
     ("Checkpoint envelope trailers: {} streams / {} bits",
      "cp_movement_envelope_trailers cp_movement_envelope_trailer_bits", "PG"),
     ("Checkpoint CNC: {} RPC rows", "cp_cnc_rpcs_emitted", "P"),

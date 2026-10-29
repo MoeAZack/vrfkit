@@ -442,12 +442,12 @@ def checkpoint_declarations(groups_pq: Path, fields_pq: Path):
     """
     import pyarrow as pa
     import pyarrow.compute as pc
-    import pyarrow.parquet as pq
+    from wire_bits import read_parquet
 
     try:
-        groups = pq.read_table(groups_pq, columns=["checkpoint_index", "ordinal", "group_path"])
+        groups = read_parquet(groups_pq, columns=["checkpoint_index", "ordinal", "group_path"])
         groups = groups.rename_columns(["checkpoint_index", "group_ordinal", "group_path"])
-        fields = pq.read_table(fields_pq, columns=["checkpoint_index", "group_ordinal", "handle",
+        fields = read_parquet(fields_pq, columns=["checkpoint_index", "group_ordinal", "handle",
                                                    "compatible_checksum", "rendered_name"])
         joined = fields.join(groups, keys=["checkpoint_index", "group_ordinal"],
                              join_type="left outer")

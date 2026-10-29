@@ -238,6 +238,7 @@ mod tests {
         ("++Ares-Core+release-13.05", ALL),
         ("++Ares-Core+release-13.06", ALL),
         ("++Ares-Core+release-13.08", ALL),
+        ("++Ares-Core+release-13.09", &[]),
     ];
 
     #[test]

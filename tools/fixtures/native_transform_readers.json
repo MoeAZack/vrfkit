@@ -85,5 +85,15 @@
     "build": "12.09",
     "exe_sha256": "60e6522c4a3bc475d8d931f74df7dd26db2da156bc6c2f3678ccc29b78cc9939",
     "function_rva": "0x3252b00"
+  },
+  {
+    "build": "13.08",
+    "exe_sha256": "7e959693df3fbd91b695b4d159bbecabada94d2dce71e33c73a67df4983024d9",
+    "function_rva": "0x4539860"
+  },
+  {
+    "build": "13.09",
+    "exe_sha256": "0c46f331f9bb734fe07c84c6fdceda512d44c827874b6521e172b679f771f4a2",
+    "function_rva": "0x42fda70"
   }
 ]

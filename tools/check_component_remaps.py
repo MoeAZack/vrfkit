@@ -175,9 +175,9 @@ def row_counts(export_dir: Path) -> tuple[dict, dict]:
     """
     import pyarrow as pa
     import pyarrow.compute as pc
-    import pyarrow.parquet as pq
+    from wire_bits import read_parquet
 
-    table = pq.read_table(export_dir / "fields.parquet",
+    table = read_parquet(export_dir / "fields.parquet",
                           columns=["group_path", "field_name"])
     names = pc.fill_null(table.column("field_name").cast(pa.string()), "")
     is_cnc = pc.match_substring(names, CNC_MARKERS[0])

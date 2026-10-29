@@ -21,10 +21,13 @@
 //!
 //! Members and payload types, with each build's handles as a reading aid ONLY:
 //!
-//! - RoundResults (`BombGameState`; 13.01: 93..=96, 13.02: 81..=84):
+//! - RoundResults (`BombGameState`; 13.01: 93..=96, 13.02: 81..=84,
+//!   13.09: 82..=93):
 //!   `WinningTeam` (FName), `WinningTeamRole` and `RoundResult` (enum bytes of
 //!   variable width), `EliminatedTeams` (skipped; declared at TWO consecutive
-//!   handles in both builds, one name arm covering both).
+//!   handles in every build, one name arm covering both). 13.09 adds
+//!   `WinningTeamMode` (an enum byte with unknown names, kept raw) and the
+//!   nested `TeamResults` array (skipped).
 //! - RoundInfos (`OwnerExclusivePlayerInfo`; 40..=44 in both builds):
 //!   `RoundNumber`, `StartOfRoundMoney`, `StartOfRoundLoadoutValue`,
 //!   `EndOfRoundMoney`, `EndOfRoundLoadoutValue` (all Int32).

@@ -210,7 +210,7 @@ trait Sink {
         reader: &mut BitReader<'_>,
         stats: &mut ArrayDecodeStats,
     ) -> bool;
-    /// One populated field, `sub` being exactly its payload window.
+    /// One present field, `sub` being exactly its possibly empty payload window.
     fn field(&mut self, handle: u32, sub: BitReader<'_>, stats: &mut ArrayDecodeStats);
 }
 
@@ -317,9 +317,6 @@ fn walk_fields(
             stats.errors += 1;
             return false;
         };
-        if payload_bits == 0 {
-            continue;
-        }
         // Fails only on a payload past the stream: the lost leaves are an
         // error. `sub_reader` advances the parent past the whole window.
         let Ok(sub) = reader.sub_reader(u64::from(payload_bits)) else {
@@ -424,6 +421,10 @@ impl Sink for StructSink<'_, '_> {
     fn field(&mut self, handle: u32, mut sub: BitReader<'_>, stats: &mut ArrayDecodeStats) {
         let schema = self.schema;
         let nested = schema.and_then(|s| s.sub_array(handle));
+        // An empty container has no array to walk; an empty leaf still exists.
+        if nested.is_some() && sub.at_end() {
+            return;
+        }
         if nested.is_some() && self.depth + 1 < MAX_RECURSION_DEPTH {
             let prefix_len = self.path.len();
             self.path.push('.');
@@ -480,6 +481,10 @@ impl Sink for ObjectSink {
     }
 
     fn field(&mut self, _: u32, mut sub: BitReader<'_>, stats: &mut ArrayDecodeStats) {
+        // Empty fields do not encode a NetGUID or claim the item's slot.
+        if sub.at_end() {
+            return;
+        }
         if self.item.is_some() {
             stats.unconsumed_nested_bits += sub.bits_remaining();
             return;
@@ -555,6 +560,93 @@ mod tests {
         bits.int_packed(0); // end outer element
         bits.int_packed(0); // outer array terminator
         bits.finish()
+    }
+
+    #[test]
+    fn a_zero_width_leaf_preserves_presence_and_decodes_as_enum_zero() {
+        // Given: capacity one, element zero, handle zero, an empty payload,
+        // then both terminators.
+        let data = [2, 2, 2, 0, 0, 0];
+        let mut stats = ArrayDecodeStats::default();
+
+        // When: walking exactly the recorded 48-bit array window.
+        let fields = decode_struct_array_exact(&data, 48, &[], &mut stats);
+
+        // Then: presence survives without borrowing any terminator bits.
+        assert_eq!(fields.len(), 1, "{stats:?}: {fields:?}");
+        let leaf = &fields[0];
+        assert_eq!((leaf.path.as_str(), leaf.handle), ("[0]._h0", 0));
+        assert_eq!(leaf.bit_count, 0);
+        assert!(leaf.raw_bits.is_empty());
+        assert_eq!(
+            crate::decode_field(
+                crate::FieldType::EnumRemainingBits,
+                &leaf.raw_bits,
+                leaf.bit_count,
+            )
+            .unwrap(),
+            crate::DecodedValue::I64(0)
+        );
+        assert_eq!(stats.elements_decoded, 1);
+        assert_eq!(stats.fields_emitted, 1);
+        assert!(stats.is_clean(), "{stats:?}");
+        assert_eq!(data, [2, 2, 2, 0, 0, 0]);
+    }
+
+    #[test]
+    fn a_nested_zero_width_leaf_preserves_its_declared_path() {
+        // Given: a schema container with a present, empty member.
+        let (data, bit_count) = nested(&one_element_with_handles(&[(7, 0)]), 0);
+        let names = [None, None, None, None, None, None, None, Some("State")];
+        let mut stats = ArrayDecodeStats::default();
+
+        // When: flattening the nested array.
+        let fields = decode_struct_array(&data, bit_count, Some(&OUTER), &names, &mut stats);
+
+        // Then: only the leaf's own empty window is emitted at its full path.
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].path, "[0].Reports[0].State");
+        assert_eq!(fields[0].handle, 7);
+        assert_eq!(fields[0].bit_count, 0);
+        assert!(fields[0].raw_bits.is_empty());
+        assert_eq!(stats.fields_emitted, 1);
+        assert!(stats.is_clean(), "{stats:?}");
+    }
+
+    #[test]
+    fn a_zero_width_container_still_has_no_array_to_walk() {
+        // Given: an empty payload at a schema's container handle.
+        let (data, bit_count) = one_element_with_handles(&[(4, 0)]).finish();
+        let mut stats = ArrayDecodeStats::default();
+
+        // When: walking the schema-guided array.
+        let fields = decode_struct_array(&data, bit_count, Some(&OUTER), &[], &mut stats);
+
+        // Then: no nested array or leaf is invented.
+        assert!(fields.is_empty());
+        assert_eq!(stats.elements_decoded, 1);
+        assert_eq!(stats.fields_emitted, 0);
+        assert!(stats.is_clean(), "{stats:?}");
+    }
+
+    #[test]
+    fn a_zero_width_object_field_still_leaves_the_guid_slot_available() {
+        // Given: an empty field before the first populated NetGUID field.
+        let mut bits = BitWriter::new();
+        bits.int_packed(1).int_packed(1);
+        bits.int_packed(1).int_packed(0);
+        bits.int_packed(3).int_packed(8).int_packed(5);
+        bits.int_packed(0).int_packed(0);
+        let (data, bit_count) = bits.finish();
+        let mut stats = ArrayDecodeStats::default();
+
+        // When: walking the same framing as an object-reference array.
+        let items = decode_object_ref_array_with_stats(&data, bit_count, &mut stats);
+
+        // Then: the empty field has not displaced the real GUID or moved errors.
+        assert_eq!(items, [(0, 5)]);
+        assert_eq!(stats.fields_emitted, 1);
+        assert!(stats.is_clean(), "{stats:?}");
     }
 
     #[test]
@@ -1167,6 +1259,14 @@ mod tests {
 
         let paths: Vec<&str> = out.iter().map(|f| f.path.as_str()).collect();
         assert_eq!(paths, ["[0].Value", "[0].Time"], "{paths:?}");
+        // Positive payload control: the real Value window is float 1.0.
+        assert_eq!(out[0].bit_count, 32);
+        assert_eq!(out[0].raw_bits, [0x00, 0x00, 0x80, 0x3f]);
+        assert_eq!(
+            crate::decode_field(crate::FieldType::Float, &out[0].raw_bits, out[0].bit_count)
+                .unwrap(),
+            crate::DecodedValue::F64(1.0)
+        );
         assert_eq!(stats.errors, 0, "{stats:?}");
         assert_eq!(stats.unconsumed_nested_bits, 0, "{stats:?}");
         assert_eq!(stats.unconsumed_root_bits, 0, "{stats:?}");
@@ -1226,7 +1326,10 @@ mod tests {
 
         assert_eq!(stats.elements_decoded, 2, "{stats:?}");
         let paths: Vec<&str> = fields.iter().map(|f| f.path.as_str()).collect();
-        assert_eq!(paths, ["[1]._h3"]);
+        let mut expected = vec!["[0]._h0"; usize::try_from(MAX_FIELDS_PER_ELEMENT).unwrap()];
+        expected.push("[1]._h3");
+        assert_eq!(paths, expected);
+        assert_eq!(stats.fields_emitted, u64::from(MAX_FIELDS_PER_ELEMENT) + 1);
         assert_eq!(anomalies(&stats), [0; 5], "{stats:?}");
     }
 
@@ -1252,7 +1355,9 @@ mod tests {
             .iter()
             .map(|f| (f.path.as_str(), f.bit_count))
             .collect();
-        assert_eq!(raw, [("[0]._raw", 32)]);
+        let mut expected = vec![("[0]._h0", 0); usize::try_from(MAX_FIELDS_PER_ELEMENT).unwrap()];
+        expected.push(("[0]._raw", 32));
+        assert_eq!(raw, expected);
     }
 
     /// A read that fails at the field limit is one error: the array loop must
@@ -1269,7 +1374,13 @@ mod tests {
 
         let fields = decode_struct_array(&data, bit_count, None, &[], &mut stats);
 
-        assert!(fields.is_empty(), "{fields:?}");
+        assert_eq!(
+            fields.len(),
+            usize::try_from(MAX_FIELDS_PER_ELEMENT).unwrap()
+        );
+        assert!(fields.iter().all(|field| field.path == "[0]._h0"
+            && field.bit_count == 0
+            && field.raw_bits.is_empty()));
         assert_eq!(anomalies(&stats), [1, 0, 0, 0, 0], "{stats:?}");
     }
 

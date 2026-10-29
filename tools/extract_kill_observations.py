@@ -8,10 +8,9 @@ from __future__ import annotations
 import hashlib, json, math, struct
 from pathlib import Path
 import pyarrow.compute as pc
-import pyarrow.parquet as pq
 
 from atomic_io import run_json_cli, sha256_file as sha
-from wire_bits import InputError, exact_ref, iter_selected, parse_array, text, weapon_theme
+from wire_bits import InputError, exact_ref, iter_selected, parse_array, read_parquet, text, weapon_theme
 
 SCHEMA_VERSION = 1
 GROUP = "/Script/ShooterGame.PlayerMatchStatsComponent"
@@ -95,7 +94,7 @@ def declarations(export):
     ):
         raise InputError("main KillData declarations differ from measured identities")
     out[None] = main
-    groups = pq.read_table(
+    groups = read_parquet(
         export / "checkpoint_export_groups.parquet",
         columns=["checkpoint_index", "ordinal", "group_path"],
         filters=[("group_path", "=", GROUP)],
@@ -108,7 +107,7 @@ def declarations(export):
             raise InputError("duplicate checkpoint declaration group")
         owners[key] = g["checkpoint_index"]
         out.setdefault(g["checkpoint_index"], {})
-    for f in pq.read_table(
+    for f in read_parquet(
         export / "checkpoint_export_fields.parquet",
         columns=[
             "checkpoint_index",
@@ -133,12 +132,12 @@ def declarations(export):
 def scoped_refs(export, table):
     if table == "fields":
         actors = set(
-            pq.read_table(
+            read_parquet(
                 export / "actors.parquet", columns=["actor_net_guid"], use_threads=False
             )["actor_net_guid"].to_pylist()
         )
         guids = set(
-            pq.read_table(
+            read_parquet(
                 export / "net_guids.parquet", columns=["net_guid"], use_threads=False
             )["net_guid"].to_pylist()
         )
@@ -146,13 +145,13 @@ def scoped_refs(export, table):
     from collections import defaultdict
 
     out = defaultdict(lambda: (set(), set()))
-    for r in pq.read_table(
+    for r in read_parquet(
         export / "checkpoint_actors.parquet",
         columns=["checkpoint_index", "actor_net_guid"],
         use_threads=False,
     ).to_pylist():
         out[r["checkpoint_index"]][0].add(r["actor_net_guid"])
-    for r in pq.read_table(
+    for r in read_parquet(
         export / "checkpoint_net_guids.parquet",
         columns=["checkpoint_index", "net_guid"],
         use_threads=False,

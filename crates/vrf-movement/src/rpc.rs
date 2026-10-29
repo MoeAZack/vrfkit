@@ -67,7 +67,13 @@ fn decode_updates_array(
     }
     result.update_count = update_count;
 
-    while !reader.at_end() {
+    loop {
+        // Capacity is not the number of changed elements: only a zero index
+        // ends a sparse array cleanly, even when no elements changed.
+        if reader.at_end() {
+            result.error_count += 1;
+            break;
+        }
         let encoded_index = reader.read_int_packed()?;
         if encoded_index == 0 {
             // Only a trailing 8-bit IntPacked may follow (never seen); any
@@ -198,6 +204,13 @@ fn parse_movement_with_bit_count(
     };
 
     let mut movement_reader = reader.sub_reader(bits)?;
+    // Outside the sized window, but still inside the component or envelope.
+    // Count before parsing so a failed section cannot hide its trailer.
+    let trailer_bits = reader.bits_remaining();
+    if trailer_bits > 0 {
+        result.sized_section_trailers += 1;
+        result.sized_section_trailer_bits += trailer_bits;
+    }
     let tail_bits = parse_movement_section(&mut movement_reader, shooter_guid, result, emit)?;
     if tail_bits > 0 {
         if uses_all_remaining {

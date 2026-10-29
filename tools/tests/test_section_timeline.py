@@ -1,7 +1,9 @@
+from unittest import mock
+
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from support import TempDirTestCase
+from support import TempDirTestCase, retained_parquet_readers
 import section_timeline as tool
 
 
@@ -214,5 +216,41 @@ class TimelineTests(TempDirTestCase):
         rows = [{**event(i, i, "dormant")[1], "class_path": "x"} for i in range(65538)]
         rows[1]["event"] = "open"; rows[-1]["event"] = "close"
         pq.write_table(pa.Table.from_pylist(rows), path)
-        actual = list(tool.actor_rows(path))
+        with retained_parquet_readers() as readers:
+            actual = list(tool.actor_rows(path))
+            self.assertTrue(readers)
+            self.assertTrue(all(reader.closed for reader in readers))
         self.assertEqual([i for i, _ in actual], [1, 65537])
+
+    def test_actor_scan_closes_input_when_filter_raises(self):
+        # Given: a real actor input and a failing row filter.
+        path = self.tmp() / "actors.parquet"
+        pq.write_table(pa.Table.from_pylist([
+            {**event(0, 0)[1], "class_path": "x"}]), path)
+        failure = ValueError("filter failed")
+        with retained_parquet_readers() as readers:
+            # When: the filter raises while the input is being scanned.
+            with mock.patch.object(tool, "text", side_effect=failure):
+                with self.assertRaises(ValueError) as raised:
+                    list(tool.actor_rows(path))
+            # Then: the same exception survives, without a retained open input.
+            self.assertIs(raised.exception, failure)
+            self.assertTrue(readers)
+            self.assertTrue(all(reader.closed for reader in readers))
+
+    def test_actor_scan_closes_input_when_consumer_closes_early(self):
+        # Given: an actor input whose iterator is not exhausted.
+        path = self.tmp() / "actors.parquet"
+        pq.write_table(pa.Table.from_pylist([
+            {**event(0, 0)[1], "class_path": "x"},
+            {**event(1, 1, "close")[1], "class_path": "x"}]), path)
+        with retained_parquet_readers() as readers:
+            rows = tool.actor_rows(path)
+            self.addCleanup(rows.close)
+            self.assertEqual(next(rows)[0], 0)
+            self.assertTrue(readers)
+            self.assertTrue(all(not reader.closed for reader in readers))
+            # When: the caller explicitly closes its partially consumed iterator.
+            rows.close()
+            # Then: the underlying input is closed before cleanup or GC.
+            self.assertTrue(all(reader.closed for reader in readers))

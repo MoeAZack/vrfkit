@@ -29,7 +29,7 @@ from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.compute as pc
-import pyarrow.parquet as pq
+from wire_bits import read_parquet
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from to_valplay_bundle import _combat_report_leaf_name  # noqa: E402
@@ -118,7 +118,7 @@ def load_cs(path):
 def load_ours(parquet=DEFAULT_OURS):
     columns = ["group_path", "field_name", "handle",
                "value_i64", "value_f64", "value_bool", "value_str"]
-    t = pq.read_table(parquet, columns=columns)
+    t = read_parquet(parquet, columns=columns)
     # Only the CombatReport Rounds rows become Python objects (of ~1.3M).
     keep = pc.and_(
         pc.match_substring(t.column("group_path").cast(pa.string()), "CombatReportComponent"),

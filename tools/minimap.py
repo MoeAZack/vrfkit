@@ -21,7 +21,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
-import pyarrow.parquet as pq
+from wire_bits import read_parquet
 
 #: Parked rows: x -50,879..-49,091 and z -49,920..-49,785 (21,301 rows, 4 exports).
 PARK_X, PARK_Z, PARK_RADIUS = -50000.0, -49900.0, 2000.0
@@ -60,7 +60,7 @@ def main(argv=None) -> int:
         manifest = json.loads((args.export / "manifest.json").read_text(encoding="utf-8"))
         map_url = manifest["level_names_and_times"][0]["name"]
         constants = load_constants(args.maps, map_url)
-        table = pq.read_table(args.export / "movement.parquet", columns=["pos_x", "pos_y", "pos_z"])
+        table = read_parquet(args.export / "movement.parquet", columns=["pos_x", "pos_y", "pos_z"])
     except (OSError, ValueError, KeyError, IndexError) as exc:
         print(f"FAILED: {exc}", file=sys.stderr)
         return 1

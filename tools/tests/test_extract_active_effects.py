@@ -11,7 +11,7 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from support import TempDirTestCase
+from support import TempDirTestCase, retained_parquet_readers
 import extract_active_effects as effects
 
 CLASS = "/Game/Characters/Pandemic/S0/Ability_Q/GameObject_Pandemic_Q_Smoke.GameObject_X_C"
@@ -134,7 +134,11 @@ class ActorKindTests(TempDirTestCase):
 
     def test_every_row_carries_its_actor_kind(self):
         temp = self.tmp()
-        rows = effects.build_with_tally(_export(temp, [(7, "open", 100), (7, "close", 500)]))[0]
+        export = _export(temp, [(7, "open", 100), (7, "close", 500)])
+        with retained_parquet_readers() as readers:
+            rows = effects.build_with_tally(export)[0]
+            self.assertTrue(readers)
+            self.assertTrue(all(reader.closed for reader in readers))
         self.assertEqual(rows[0]["actor_kind"], "game_object")
         self.assertIn("actor_kind", effects.SCHEMA.names)
 
@@ -174,7 +178,8 @@ class TracksTests(TempDirTestCase):
             code = effects.main(["--export", str(self.export), "--out", str(out / "effects.parquet"),
                                  "--tracks", str(out / "tracks.parquet")])
         self.assertEqual(code, 0)
-        self.assertEqual(pq.read_table(out / "tracks.parquet").num_rows, 3)
+        with pq.ParquetFile(out / "tracks.parquet", pre_buffer=False) as source:
+            self.assertEqual(source.read().num_rows, 3)
         self.assertIn("untyped rows, kept with null coordinates: 1", stdout.getvalue())
 
     def test_an_output_naming_an_export_table_or_the_other_output_is_refused(self):

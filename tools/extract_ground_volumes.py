@@ -33,10 +33,9 @@ import sys
 
 import pyarrow as pa
 import pyarrow.compute as pc
-import pyarrow.parquet as pq
 
 from atomic_io import sha256_file as sha, staged_output
-from wire_bits import Bits, WireError, fastarray_header, iter_selected, load_net_guids, text
+from wire_bits import Bits, WireError, fastarray_header, iter_selected, load_net_guids, read_parquet, text
 
 SCHEMA_VERSION = 2
 CLASS_GROUP = "/Script/DynamicVolume.GroundVolumeComponent"
@@ -324,7 +323,7 @@ def load_schema(export_dir: Path, manifest: dict) -> ReplaySchema:
             for field in group["fields"]:
                 add(group["path"], field["handle"], (field["name"], int(field["compatible_checksum"])))
     wanted, slots = {}, set()
-    groups = pq.read_table(export_dir / "checkpoint_export_groups.parquet",
+    groups = read_parquet(export_dir / "checkpoint_export_groups.parquet",
                            columns=["checkpoint_index", "path_name_index", "group_path", "declared_slots"])
     for row in groups.to_pylist():
         if row["group_path"] in declared:
@@ -332,7 +331,7 @@ def load_schema(export_dir: Path, manifest: dict) -> ReplaySchema:
             if row["group_path"] == CNC_GROUP:
                 slots.add(row["declared_slots"])
     if wanted:
-        fields = pq.read_table(export_dir / "checkpoint_export_fields.parquet",
+        fields = read_parquet(export_dir / "checkpoint_export_fields.parquet",
                                columns=["checkpoint_index", "path_name_index", "handle",
                                         "compatible_checksum", "rendered_name"])
         indexes = sorted({key[1] for key in wanted})
@@ -364,7 +363,7 @@ def selected_rows(path: Path, checkpoint: bool):
 def owner_classes(export_dir: Path) -> dict:
     """actor GUID -> set of class paths on its `open` events."""
     owners = {}
-    table = pq.read_table(export_dir / "actors.parquet", columns=["actor_net_guid", "event", "class_path"])
+    table = read_parquet(export_dir / "actors.parquet", columns=["actor_net_guid", "event", "class_path"])
     for row in table.to_pylist():
         if row["event"] == "open":
             owners.setdefault(row["actor_net_guid"], set()).add(row["class_path"])

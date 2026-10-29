@@ -207,7 +207,8 @@ def load_rust_records(path):
                "field_name", "value_i64", "value_f64", "value_bool", "value_str"]
     vtypes = {func: dict(params) for func, params in RPCS_TO_CHECK.items()}
     wanted = [f"{func}.{param}" for func, params in vtypes.items() for param in params]
-    t = pq.read_table(str(path), columns=columns)
+    with pq.ParquetFile(path, pre_buffer=False) as source:
+        t = source.read(columns=columns)
     # Only the compared parameter rows, in file order, become Python objects.
     names = t.column("field_name").cast(pa.string())
     t = t.filter(pc.fill_null(pc.is_in(names, value_set=pa.array(wanted)), False))

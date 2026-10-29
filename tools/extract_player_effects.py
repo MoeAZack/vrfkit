@@ -14,11 +14,9 @@ import json
 from collections import Counter
 from pathlib import Path
 
-import pyarrow.parquet as pq
-
 from atomic_io import run_json_cli
 from player_identity import FINAL_PROVENANCE, load_player_bodies
-from wire_bits import load_net_guids
+from wire_bits import load_net_guids, read_parquet
 
 
 BLIND_GROUP = "/Script/ShooterGame.BlindManagerComponent"
@@ -38,7 +36,7 @@ def build(export_dir: Path) -> dict:
     players = bodies.subjects
     conflicts = bodies.conflicts
     paths = load_net_guids(export_dir, "path")
-    fields = pq.read_table(export_dir / "fields.parquet", columns=COLUMNS,
+    fields = read_parquet(export_dir / "fields.parquet", columns=COLUMNS,
                            filters=[("group_path", "in", [BLIND_GROUP, EFFECT_GROUP])])
     records = []
     pending = None

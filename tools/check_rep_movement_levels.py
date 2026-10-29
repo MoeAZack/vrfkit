@@ -31,7 +31,7 @@ from collections import Counter
 from pathlib import Path
 
 import pyarrow.compute as pc
-import pyarrow.parquet as pq
+from wire_bits import read_parquet
 
 from export_scan import discover_exports
 from overlay_mirror import overlay_entries, scoped_entries
@@ -92,13 +92,13 @@ def decode(raw: bytes | None, bits: int):
 def read_export(export: Path, stats: dict[str, ClassStats], unjoined: Counter) -> int:
     build = json.loads((export / "manifest.json").read_text(encoding="utf-8")).get(
         "replay_build", "?")
-    actors = pq.read_table(export / "actors.parquet", columns=ACTOR_COLUMNS)
+    actors = read_parquet(export / "actors.parquet", columns=ACTOR_COLUMNS)
     actors = actors.filter(pc.and_(pc.equal(actors["event"], "open"),
                                    pc.is_valid(actors["spawn_x"])))
     spawns = {(c, g, t): (cls, (x, y, z)) for t, c, g, cls, x, y, z in zip(
         *(actors[n].to_pylist() for n in ACTOR_COLUMNS if n != "event"))
         if math.hypot(x, y, z) >= MIN_SPAWN}
-    fields = pq.read_table(export / "fields.parquet", columns=FIELD_COLUMNS,
+    fields = read_parquet(export / "fields.parquet", columns=FIELD_COLUMNS,
                            filters=[("field_name", "==", FIELD)])
     last = {}
     for t, c, g, group, checksum, bits, raw, text in zip(

@@ -4,12 +4,16 @@ carrying the spike, nobody, or a proxy walked back through its `Instigator`);
 the plant-time carrier lookup; the failure conditions; and the whole join on a
 synthetic export whose carrier is a reconnected player's earlier pawn."""
 import json
+import os
+import subprocess
+import sys
 import unittest
+from unittest import mock
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from support import TempDirTestCase
+from support import TempDirTestCase, read_parquet, run_cli
 import extract_spike_carrier as spike
 
 
@@ -59,6 +63,7 @@ class ClassifyOwnerTests(unittest.TestCase):
 
 def interval(from_ms, to_ms, subject="gekko-uuid", pawn=576):
     return {"from_ms": from_ms, "to_ms": to_ms, "holder_kind": "player",
+            "bomb_net_guid": 900, "owner_net_guid": pawn,
             "carrier_pawn_guid": pawn, "carrier_subject": subject,
             "via_proxy_class": "", "round_number": 1}
 
@@ -80,6 +85,25 @@ class CarrierAtTests(unittest.TestCase):
 
     def test_no_intervals_at_all_resolves_to_nobody(self):
         self.assertIsNone(spike.carrier_at([], 500))
+
+    def test_a_boundary_with_a_different_owner_is_unresolved(self):
+        for kind in ("loose", "unknown", "player", "proxy"):
+            with self.subTest(kind=kind):
+                rows = [interval(100, 200), interval(200, 300, pawn=870)]
+                rows[1]["holder_kind"] = kind
+                self.assertIsNone(spike.carrier_at(rows, 200))
+
+    def test_a_plant_tied_with_terminal_close_is_unresolved(self):
+        self.assertIsNone(spike.carrier_at([interval(100, 200)], 200))
+
+    def test_repeated_same_owner_writes_preserve_attribution(self):
+        rows = [interval(100, 200), interval(200, 200), interval(200, 300)]
+        self.assertEqual(spike.carrier_at(rows, 200), rows[-1])
+
+    def test_a_zero_duration_noncarrier_preserves_boundary_ambiguity(self):
+        rows = [interval(100, 200), interval(200, 200), interval(200, 300)]
+        rows[1]["holder_kind"] = "loose"
+        self.assertIsNone(spike.carrier_at(rows, 200))
 
 
 class UnresolvedTests(unittest.TestCase):
@@ -111,6 +135,14 @@ class UnresolvedTests(unittest.TestCase):
         self.assertEqual(
             spike.unresolved([interval(0, 900)], {"group": [], "time1": []}), [])
 
+    def test_a_plant_at_a_noncarrier_transition_is_unresolved(self):
+        for kind in ("loose", "unknown"):
+            with self.subTest(kind=kind):
+                rows = [interval(100, 200), interval(200, 300)]
+                rows[1]["holder_kind"] = kind
+                events = {"group": ["spikePlanted"], "time1": [200]}
+                self.assertEqual(len(spike.unresolved(rows, events)), 1)
+
 
 BOMB = "/Game/Equippables/Bomb/BombEquippable.BombEquippable_C"
 PLAYER_STATE = "/Game/GameModes/Bomb/BombPlayerState.BombPlayerState_C"
@@ -123,7 +155,7 @@ class ReconnectedCarrierTests(TempDirTestCase):
     spike in round 5; a join on the manifest's last pawn alone reads that
     custody as `unknown` and the plant as `NO CARRIER`."""
 
-    def build(self):
+    def export(self):
         root = self.tmp()
         # PlayerState 300 has a subject and no character, as some real ones do.
         (root / "manifest.json").write_text(json.dumps({"players": [
@@ -156,10 +188,10 @@ class ReconnectedCarrierTests(TempDirTestCase):
         events = {"group": ["roundStarted", "spikePlanted"], "time1": [50, 250],
                   "metadata": ["5", None]}
         pq.write_table(pa.table(events), root / "events.parquet")
-        return spike.build(root)
+        return root
 
     def test_an_earlier_pawn_of_a_reconnected_player_is_the_carrier(self):
-        rows = self.build()[0]
+        rows = spike.build(self.export())[0]
         first = rows[0]
         self.assertEqual((first["owner_net_guid"], first["holder_kind"]), (1510, "player"))
         self.assertEqual(first["carrier_subject"], "reconnected")
@@ -169,16 +201,93 @@ class ReconnectedCarrierTests(TempDirTestCase):
         self.assertIsNone(rows[1]["carrier_identity_provenance"])
 
     def test_the_plant_by_the_earlier_pawn_resolves(self):
-        rows, events = self.build()[:2]
+        rows, events = spike.build(self.export())[:2]
         self.assertEqual(spike.unresolved(rows, events), [])
 
     def test_a_loose_spike_has_no_carrier_subject(self):
         """The manifest-only map held a None key for a player with no
         character, so `pawn_subject.get(None)` gave every loose interval that
         player's subject: 86 and 46 intervals on 4b8191e8 and 8cda0666."""
-        loose = self.build()[0][1]
+        loose = spike.build(self.export())[0][1]
         self.assertEqual((loose["holder_kind"], loose["carrier_pawn_guid"]), ("loose", None))
         self.assertIsNone(loose["carrier_subject"])
+
+    def test_input_paths_and_symlink_aliases_are_refused_before_build(self):
+        for name in ("fields.parquet", "actors.parquet", "manifest.json", "events.parquet"):
+            for alias in (False, True):
+                with self.subTest(name=name, alias=alias):
+                    root = self.export()
+                    source = root / name
+                    before = source.read_bytes()
+                    target = root / "alias.parquet" if alias else source
+                    if alias:
+                        try:
+                            target.symlink_to(source)
+                        except OSError as error:
+                            # A normal Windows account may not have Developer
+                            # Mode or SeCreateSymbolicLinkPrivilege. The same
+                            # cases still run on CI and privileged machines.
+                            if getattr(error, "winerror", None) == 1314:
+                                continue
+                            raise
+                    with mock.patch.object(spike, "build", wraps=spike.build) as build:
+                        code = run_cli(spike.main, "--export", root, "--out", target,
+                                       prog="extract_spike_carrier.py")[0]
+                    self.assertEqual(code, 1)
+                    self.assertEqual(source.read_bytes(), before)
+                    build.assert_not_called()
+
+    def test_existing_analysis_and_hard_link_outputs_can_be_replaced(self):
+        for hard_link in (False, True):
+            with self.subTest(hard_link=hard_link):
+                root = self.export()
+                source, target = root / "fields.parquet", root / "spike_carrier.parquet"
+                before = source.read_bytes()
+                if hard_link:
+                    os.link(source, target)
+                else:
+                    target.write_bytes(b"previous analysis")
+                code = run_cli(spike.main, "--export", root, "--out", target,
+                               prog="extract_spike_carrier.py")[0]
+                self.assertEqual(code, 0)
+                self.assertEqual(source.read_bytes(), before)
+                self.assertEqual(read_parquet(target).column_names, spike.SCHEMA.names)
+
+    def test_cli_reports_unresolved_custody_at_and_after_the_drop(self):
+        for plant_ms, expected in ((299, 0), (300, 1), (301, 1)):
+            with self.subTest(plant_ms=plant_ms):
+                root = self.export()
+                pq.write_table(pa.table({"group": ["spikePlanted"],
+                                        "time1": [plant_ms], "metadata": [None]}),
+                               root / "events.parquet")
+                target = root / "spike_carrier.parquet"
+                result = subprocess.run(
+                    [sys.executable, "-B", "-W", "error", spike.__file__,
+                     "--export", str(root), "--out", str(target)],
+                     capture_output=True, text=True, encoding="utf-8", errors="strict",
+                     check=False)
+                self.assertEqual(result.returncode, expected, result.stderr)
+                self.assertEqual(read_parquet(target)["owner_net_guid"].to_pylist(),
+                                 [1510, 950, 45530])
+
+    def test_equal_time_writes_keep_packet_then_physical_row_order(self):
+        for packets in ((10, 20, 30), (10, 20, 20), (10, 30, 20)):
+            with self.subTest(packets=packets):
+                root = self.export()
+                table = read_parquet(root / "fields.parquet")
+                fields = table.to_pylist()
+                for row, time, packet, owner in zip(
+                        (fields[1], fields[2], fields[5]), (100, 200, 200),
+                        packets, (1510, 45530, 1510)):
+                    row.update(time_ms=time, packet_id=packet, value_i64=owner)
+                pq.write_table(pa.Table.from_pylist(fields, schema=table.schema),
+                               root / "fields.parquet")
+                rows = spike.build(root)[0]
+                final_owner = 45530 if packets == (10, 30, 20) else 1510
+                self.assertEqual(spike.carrier_at(rows, 250)["owner_net_guid"], final_owner)
+                self.assertEqual([r["owner_net_guid"] for r in rows],
+                                 [1510, 1510, 45530] if final_owner == 45530
+                                 else [1510, 45530, 1510])
 
 
 class LeafTests(unittest.TestCase):

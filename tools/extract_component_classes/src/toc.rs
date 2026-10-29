@@ -163,9 +163,23 @@ pub fn parse_toc(bytes: &[u8]) -> Result<Toc> {
         });
     }
 
-    let mut methods = Vec::with_capacity(compression_method_count as usize);
-    for _ in 0..compression_method_count {
-        let raw = c.take(compression_method_length as usize)?;
+    if compression_method_count != 0 && compression_method_length != 32 {
+        return fail(format!(
+            "utoc: method name width {compression_method_length}, expected 32 for a nonempty table"
+        ));
+    }
+    let method_count = usize::try_from(compression_method_count)
+        .map_err(|_| crate::reader::Error("utoc: method count exceeds address space".to_owned()))?;
+    // Division bounds both allocation and multiplication by physical input.
+    if method_count > c.remaining() / 32 {
+        return fail(format!(
+            "utoc: {method_count} method names need 32 bytes each, only {} bytes left",
+            c.remaining()
+        ));
+    }
+    let method_bytes = c.take(method_count * 32)?;
+    let mut methods = Vec::with_capacity(method_count);
+    for raw in method_bytes.chunks_exact(32) {
         let end = raw.iter().position(|&b| b == 0).unwrap_or(raw.len());
         methods.push(String::from_utf8_lossy(&raw[..end]).into_owned());
     }
@@ -470,5 +484,73 @@ pub(crate) mod tests {
         let mut spec = two_chunk_spec();
         spec.blocks[0].method = 2;
         assert!(parse_toc(&build_toc(&spec)).is_err());
+    }
+
+    #[test]
+    fn nonempty_zero_width_method_tables_are_rejected() {
+        // Given the recorded 148-byte unsigned empty TOC.
+        let spec = TocSpec {
+            flags: 0,
+            methods: vec![],
+            ..TocSpec::default()
+        };
+        let mut bytes = build_toc(&spec);
+        assert_eq!(bytes.len(), 148);
+        bytes[36..40].copy_from_slice(&4096u32.to_le_bytes());
+        bytes[40..44].copy_from_slice(&0u32.to_le_bytes());
+        // When parsing the nonempty table that consumes no input.
+        let result = parse_toc(&bytes);
+        // Then a bounded input cannot manufacture 4096 empty method names.
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn unsupported_nonempty_method_width_is_rejected() {
+        // Given a physically complete table using an unverified 16-byte width.
+        let spec = TocSpec {
+            flags: 0,
+            ..TocSpec::default()
+        };
+        let mut bytes = build_toc(&spec);
+        bytes[40..44].copy_from_slice(&16u32.to_le_bytes());
+        bytes.truncate(bytes.len() - 16);
+        // When parsing this unsupported layout.
+        let result = parse_toc(&bytes);
+        // Then it is rejected rather than inferred from the available bytes.
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn method_counts_exceeding_available_bytes_are_rejected() {
+        // Given a supported width with no physical method-name bytes.
+        let spec = TocSpec {
+            flags: 0,
+            methods: vec![],
+            ..TocSpec::default()
+        };
+        let mut bytes = build_toc(&spec);
+        bytes[36..40].copy_from_slice(&4096u32.to_le_bytes());
+        // When parsing a count that exceeds the input-bound table capacity.
+        let result = parse_toc(&bytes);
+        // Then the truncated method table is rejected.
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn empty_method_tables_accept_zero_or_supported_width() {
+        // Given empty tables with no names to decode.
+        for width in [0u32, 32] {
+            let spec = TocSpec {
+                flags: 0,
+                methods: vec![],
+                ..TocSpec::default()
+            };
+            let mut bytes = build_toc(&spec);
+            bytes[40..44].copy_from_slice(&width.to_le_bytes());
+            // When parsing either empty representation.
+            let toc = parse_toc(&bytes).unwrap();
+            // Then neither representation creates a method.
+            assert!(toc.methods.is_empty());
+        }
     }
 }

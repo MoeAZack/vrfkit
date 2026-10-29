@@ -9,7 +9,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 
-from support import TempDirTestCase
+from support import TempDirTestCase, read_parquet
 import extract_match_observations as observations
 
 
@@ -70,7 +70,7 @@ def write_export(root: Path) -> None:
 def append_field_rows(root: Path, rows: list[tuple]) -> None:
     """Append rows using the fixture's exported Arrow schema."""
     path = root / "fields.parquet"
-    table = pq.read_table(path)
+    table = read_parquet(path)
     names = table.schema.names
     addition = pa.Table.from_pylist(
         [{name: row[index] for index, name in enumerate(names)} for row in rows],
@@ -81,7 +81,7 @@ def append_field_rows(root: Path, rows: list[tuple]) -> None:
 
 class MatchObservationTests(TempDirTestCase):
     def _replace_state_rows(self, root: Path, rows: list[tuple]) -> None:
-        table = pq.read_table(root / "fields.parquet")
+        table = read_parquet(root / "fields.parquet")
         keep = pa.array([not group.endswith("EquippableStateMachineComponent")
                          for group in table["group_path"].to_pylist()])
         pq.write_table(table.filter(keep), root / "fields.parquet")
@@ -153,7 +153,7 @@ class MatchObservationTests(TempDirTestCase):
                              {k: int(k == tally) for k in observations.WEAPON_RPC_TALLY})
         root = self.tmp()
         write_export(root)
-        net = pq.read_table(root / "net_guids.parquet").to_pylist()
+        net = read_parquet(root / "net_guids.parquet").to_pylist()
         pq.write_table(pa.Table.from_pylist([dict(r, outer_net_guid=None) if r["net_guid"] == 100
                                              else r for r in net]), root / "net_guids.parquet")
         result = observations.build(root)
@@ -273,14 +273,14 @@ class MatchObservationTests(TempDirTestCase):
 
     def test_a_repeated_net_guid_fails_loudly(self):
         root = self.tmp(); write_export(root)
-        net = pq.read_table(root / "net_guids.parquet")
+        net = read_parquet(root / "net_guids.parquet")
         pq.write_table(pa.concat_tables([net, net.slice(0, 1)]), root / "net_guids.parquet")
         with self.assertRaisesRegex(ValueError, "repeats"):
             observations.build(root)
 
     def test_a_second_weapons_magazine_does_not_join(self):
         root = self.tmp(); write_export(root)
-        net = pq.read_table(root / "net_guids.parquet")
+        net = read_parquet(root / "net_guids.parquet")
         pq.write_table(pa.concat_tables([net, pa.table({
             "net_guid": [101], "path": ["MagazineAmmo"], "outer_net_guid": [201],
         })]), root / "net_guids.parquet")
@@ -297,7 +297,7 @@ class MatchObservationTests(TempDirTestCase):
         append_field_rows(root, [
             (18, 2, 0, 100, "/Script/ShooterGame.AmmoComponent", "AuthResourceAmount", 35, None),
         ])
-        events = pq.read_table(root / "events.parquet")
+        events = read_parquet(root / "events.parquet")
         pq.write_table(pa.concat_tables([events, pa.table({
             "group": ["roundStarted"], "time1": [20],
         })]), root / "events.parquet")
@@ -325,7 +325,7 @@ class MatchObservationTests(TempDirTestCase):
         ]
         append_field_rows(original, conflict)
         append_field_rows(shuffled, conflict)
-        table = pq.read_table(shuffled / "fields.parquet")
+        table = read_parquet(shuffled / "fields.parquet")
         reverse = pa.array(range(table.num_rows - 1, -1, -1))
         pq.write_table(table.take(reverse), shuffled / "fields.parquet")
         result = observations.build(original)
@@ -380,7 +380,7 @@ class MatchObservationTests(TempDirTestCase):
     def test_round_balance_player_stays_null_without_the_owner_chain(self):
         root = self.tmp()
         write_export(root)
-        table = pq.read_table(root / "fields.parquet")
+        table = read_parquet(root / "fields.parquet")
         keep = pa.array([
             not (group.endswith("BombPlayerState_C") and name == "Owner")
             for group, name in zip(table.column("group_path").to_pylist(),
@@ -399,12 +399,12 @@ class MatchObservationTests(TempDirTestCase):
     def _team_switch(root: Path, events: dict, money: list[tuple], buyer_snapshot_ms=None):
         """Append switch/round events, a Money component 510 of PlayerState 610,
         and optionally a PurchasedItemComponent snapshot of that player."""
-        net = pq.read_table(root / "net_guids.parquet")
+        net = read_parquet(root / "net_guids.parquet")
         pq.write_table(pa.concat_tables([net, pa.table({
             "net_guid": [510, 511], "path": pa.array([None, None], pa.string()),
             "outer_net_guid": [610, 611],
         })]), root / "net_guids.parquet")
-        old = pq.read_table(root / "events.parquet")
+        old = read_parquet(root / "events.parquet")
         pq.write_table(pa.concat_tables([old, pa.table(events)]), root / "events.parquet")
         group = "/Script/ShooterGame.MoneyManagementComponent"
         rows = [(time_ms, packet_id, 0, component, group, "Money", value, None)

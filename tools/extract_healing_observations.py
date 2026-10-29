@@ -9,12 +9,11 @@ import collections, json, re
 from pathlib import Path
 import pyarrow as pa
 import pyarrow.compute as pc
-import pyarrow.parquet as pq
 
 import extract_section_observations as sections
 from atomic_io import run_json_cli, sha256_file as sha
 from player_identity import load_player_bodies
-from wire_bits import InputError, iter_selected, load_net_guids, text
+from wire_bits import InputError, iter_selected, load_net_guids, read_parquet, text
 IntegrityError = sections.IntegrityError
 SCHEMA_VERSION = 1
 ROUTE = "MulticastNotifyHeal"
@@ -339,7 +338,7 @@ def extract(export):
     players = bodies.subjects
     paths = load_net_guids(export, "path")
     actors = collections.defaultdict(list)
-    for o, r in enumerate(pq.read_table(
+    for o, r in enumerate(read_parquet(
         export / "actors.parquet",
         columns=["time_ms", "packet_id", "channel_index", "actor_net_guid", "event", "class_path"],
         use_threads=False,

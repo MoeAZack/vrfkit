@@ -110,7 +110,8 @@ def build(export: Path) -> tuple[list[dict], Counter, list[str]]:
 
     opens = [min(r[c] for c in PHASE_COLUMNS.values() if r[c] is not None) for r in rounds]
     placed: dict[tuple[int, str], list] = {}
-    events = pq.read_table(export / "events.parquet", columns=["group", "time1", "word0"]).to_pylist()
+    with pq.ParquetFile(export / "events.parquet", pre_buffer=False) as source:
+        events = source.read(columns=["group", "time1", "word0"]).to_pylist()
     for what, t, value in [
             *(("round_number", e["time1"], e["word0"]) for e in events if e["group"] == "roundStarted"),
             *((SPIKE_COLUMNS[e["group"]], e["time1"], e["time1"]) for e in events

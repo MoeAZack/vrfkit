@@ -18,10 +18,9 @@ from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.compute as pc
-import pyarrow.parquet as pq
 
 from atomic_io import run_json_cli
-from wire_bits import load_net_guids
+from wire_bits import load_net_guids, read_parquet
 
 
 MAGAZINE_PATH = "MagazineAmmo"
@@ -125,7 +124,7 @@ def _value_at(timeline, time_ms: int, packet_id: int):
 
 
 def _read_columns(path: Path, columns: list[str], *, observation_fields=False) -> dict[str, list]:
-    table = pq.read_table(path, columns=columns)
+    table = read_parquet(path, columns=columns)
     if observation_fields:
         # Filtered in Arrow before millions of Python objects; order is kept.
         names = pc.cast(table.column("field_name"), pa.string())
