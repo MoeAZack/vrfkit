@@ -121,13 +121,14 @@ def unselected_route_name_rows(path: Path) -> int:
     with: counted, neither selected nor decoded (0 on every measured export)."""
     route_names = pa.array(sorted({name for _, name in ROUTES.values()}))
     total = 0
-    for batch in pq.ParquetFile(path).iter_batches(columns=["group_path", "field_name"],
-                                                   batch_size=65536, use_threads=False):
-        groups = pc.cast(batch.column("group_path"), pa.string())
-        names = pc.cast(batch.column("field_name"), pa.string())
-        named = pc.fill_null(pc.is_in(names, value_set=route_names), False)
-        unselected = pc.and_(named, pc.invert(route_mask(groups, names)))
-        total += pc.sum(pc.cast(unselected, pa.int64())).as_py() or 0
+    with pq.ParquetFile(path, pre_buffer=False) as source:
+        for batch in source.iter_batches(columns=["group_path", "field_name"],
+                                         batch_size=65536, use_threads=False):
+            groups = pc.cast(batch.column("group_path"), pa.string())
+            names = pc.cast(batch.column("field_name"), pa.string())
+            named = pc.fill_null(pc.is_in(names, value_set=route_names), False)
+            unselected = pc.and_(named, pc.invert(route_mask(groups, names)))
+            total += pc.sum(pc.cast(unselected, pa.int64())).as_py() or 0
     return total
 
 

@@ -54,6 +54,20 @@ def manifest():
 
 
 class ManifestTests(unittest.TestCase):
+    def test_sized_section_remainders_fail_independently_in_each_pass(self):
+        for scope in ("main", "checkpoint"):
+            for key, value in (("movement_sized_section_trailers", 1),
+                               ("movement_sized_section_trailer_bits", 8)):
+                # Given: one remainder count, independently nonzero.
+                data = manifest()
+                target = data["quality"] if scope == "main" else data["quality"]["checkpoints"]
+                target["sink"][key] = value
+                # When: the independent manifest audit measures both passes.
+                counts, failures = audit.manifest_counts(data)
+                # Then: the new shape cannot disappear behind the other zero.
+                self.assertEqual(counts[f"{scope}_{key}"], value)
+                self.assertIn(f"{scope}_{key}={value}", failures)
+
     def test_preserved_unknown_rpc_is_not_loss(self):
         counts, failures = audit.manifest_counts(manifest())
         self.assertEqual(failures, [])
@@ -345,18 +359,20 @@ class CheckExportTests(unittest.TestCase):
     def run_check_export(self, counts, errors=(), lies=()):
         with tempfile.TemporaryDirectory() as temp, ExitStack() as stack:
             directory = Path(temp)
+            printed = {key: i for i, key in enumerate(audit.summary_counters.WHERE, 1)}
+            text = "\n".join(audit.summary_counters.render(line, printed)
+                             for line in audit.summary_counters.SPEC)
             for name in audit.baseline.PARQUET_FILES + audit.baseline.CHECKPOINT_PARQUET_FILES:
                 pq.write_table(pa.table({"value": [1]}), directory / f"{name}.parquet")
-            stack.enter_context(patch.object(audit.summary_counters, "read", return_value={}))
             stack.enter_context(patch.object(audit.overlay, "reconcile", return_value=None))
             stack.enter_context(patch.object(audit.baseline, "cross_checks",
                                              return_value=list(lies)))
             checks = stack.enter_context(patch.object(
                 audit.baseline, "export_errors", return_value=(list(errors), counts)))
             try:
-                return audit.check_export("summary", directory)
+                return audit.check_export(text, directory)
             finally:
-                checks.assert_called_once_with(directory, {}, True)
+                checks.assert_called_once_with(directory, printed, True)
 
     def test_passing_checks_return_the_crosscheck_counts_with_the_tables(self):
         counts = guid_counts(indexed_joined=7, indexed_path_equal=7)

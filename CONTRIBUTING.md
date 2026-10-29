@@ -59,6 +59,12 @@ python -W error tools/check_docs.py   # runs cargo test --workspace and the tool
 `python -W error -m unittest discover -b -s tools/tests -p "test_*.py"`) for
 its full output.
 
+The suite-size claims distinguish `(Windows)` and `(non-Windows)`: one
+publication test exercises a Windows-only filesystem refusal. The full guard
+still runs both suites and checks the executing platform's counts; an
+unqualified claim applies everywhere. A local count is not a successful
+Windows runtime check.
+
 For the interop lines, point `VRFKIT_INTEROP_DIR` at a private root; the Rust
 test writes its files to that root's `interop` child, which is passed exactly
 to Python. The script refuses to search the system temp directory, because

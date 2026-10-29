@@ -428,17 +428,17 @@ def load_export(directory: Path, stats: LoadStats) -> Replay:
     if group_file.is_file():
         import pyarrow as pa
         import pyarrow.compute as pc
-        import pyarrow.parquet as pq
+        from wire_bits import read_parquet
 
         stats.exports_with_checkpoints += 1
         keys = ["checkpoint_index", "group_ordinal"]
-        gt = pq.read_table(group_file, columns=[
+        gt = read_parquet(group_file, columns=[
             "checkpoint_index", "ordinal", "path_name_index", "group_path"]).rename_columns(
             keys + ["group_path_index", "group_path"])
         groups.update(map(_intern, pc.unique(gt["group_path"]).to_pylist()))
         stats.checkpoint_groups += gt.num_rows
         stats.repeated_checkpoint_groups += gt.num_rows - gt.group_by(keys).aggregate([]).num_rows
-        ft = pq.read_table(field_file, columns=keys + [
+        ft = read_parquet(field_file, columns=keys + [
             "path_name_index", "handle", "compatible_checksum", "rendered_name"])
         joined = ft.join(gt.append_column("declared", pa.repeat(True, gt.num_rows)), keys)
         declared = pc.is_valid(joined["declared"])

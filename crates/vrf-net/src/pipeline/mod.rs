@@ -574,7 +574,9 @@ impl ReplicationReader {
                     );
                 }
             }
-        } else if bit_count != 0 {
+        } else if bit_count != 0 || header.b_open {
+            // Even an empty open must fail its actor GUID read and retire the
+            // actor it displaced; payload-less closes need no payload walk.
             let mut payload = payload;
             Self::process_complete_payload(header, &mut payload, stage, sink, ids);
         }
@@ -1279,6 +1281,60 @@ mod tests {
         assert_eq!(reader.stats().bunch_header_failures, 1);
     }
 
+    #[test]
+    fn an_empty_reopen_retires_the_previous_actor() {
+        // Given: actor 3 is open before an empty complete reopen.
+        let packets = [
+            open_on_two(3),
+            build_open_bunch_packet(2, &[]),
+            later_block_on_two(),
+        ];
+
+        // When: the later actor content follows the failed reopen.
+        let (reader, sink) = run_packets(&packets);
+
+        // Then: only the original block belongs to actor 3; no close is invented.
+        assert_actor_three_retired(&reader, &sink);
+        assert_eq!(sink.content_blocks[0].outer_net_guid, NetworkGuid(3));
+        assert!(sink.closes.is_empty());
+        assert_eq!(reader.stats().bunch_header_failures, 1);
+        assert_eq!(reader.stats().actor_opens_missing_spawn, 0);
+        assert_eq!(
+            reader.stats().skipped_bits,
+            0,
+            "the failed open has no bits"
+        );
+    }
+
+    #[test]
+    fn a_one_bit_reopen_retires_the_previous_actor() {
+        // Given: a one-bit actor GUID cannot complete.
+        let reopen = build_open_bunch_packet(2, &[false]);
+
+        // When: actor 3's open, the truncated reopen and later content arrive.
+        let reader = probe(reopen);
+
+        // Then: the same failure accounting applies, charging the one wire bit.
+        assert_eq!(reader.stats().bunch_header_failures, 1);
+        assert_eq!(reader.stats().skipped_bits, 1);
+    }
+
+    #[test]
+    fn a_payload_less_close_still_closes_the_live_actor() {
+        // Given: a live actor followed by an ordinary payload-less close.
+        let packets = [open_on_two(3), close_on_two(false)];
+
+        // When: the close passes through the packet pipeline.
+        let (reader, sink) = run_packets(&packets);
+
+        // Then: the close succeeds without a header failure or failed reopen.
+        assert_eq!(sink.closes, vec![2]);
+        assert_eq!(reader.stats().actor_closes, 1);
+        assert_eq!(reader.stats().bunch_header_failures, 0);
+        assert_eq!(reader.stats().failed_reopens_while_open, 0);
+        assert_eq!(reader.stats().skipped_bits, 0);
+    }
+
     /// An open bunch whose must-be-mapped list fails to read is abandoned
     /// before its open is reached.
     #[test]
@@ -1897,6 +1953,74 @@ mod tests {
         assert_eq!(sink.stream_failures[0].cause, StreamFailureCause::ReadError);
         assert_eq!(sink.stream_failures[0].record_handle, None);
         assert_eq!(sink.stream_failures[0].record_offset, Some(17));
+    }
+
+    #[test]
+    fn rep_layout_checksum_only_is_a_stream_failure() {
+        // Given: a decoded window containing only the checksum bit.
+        let decoded_bits = [false];
+
+        // When: the real transform and stream walker process that window.
+        let Run { stats, sink, .. } = decode_bits(&decoded_bits, None, TestSink::default());
+
+        // Then: existing accounting charges the whole failed one-bit block.
+        assert_eq!(stats.field_stream_failures, 1);
+        assert_eq!(stats.skipped_bits, 1);
+        assert_eq!(stats.fields, 0);
+        assert_eq!(sink.stream_failures.len(), 1);
+        let failure = &sink.stream_failures[0];
+        assert_eq!(failure.kind, StreamKind::RepLayout);
+        assert_eq!(failure.cause, StreamFailureCause::ReadError);
+        assert_eq!(failure.consumed_bits, 1);
+        assert_eq!(failure.remaining_bits, 0);
+        assert_eq!(
+            (failure.record_handle, failure.record_offset),
+            (None, Some(1))
+        );
+        assert!(sink.rep_layout_tails.is_empty());
+    }
+
+    #[test]
+    fn rep_layout_checksum_and_zero_handle_is_a_clean_stream() {
+        // Given: checksum followed by the complete encoded zero terminator.
+        let mut decoded_bits = vec![false];
+        decoded_bits.int_packed(0);
+
+        // When: the real transform and stream walker process all nine bits.
+        let Run { stats, sink, .. } = decode_bits(&decoded_bits, None, TestSink::default());
+
+        // Then: the valid empty stream produces neither failure nor lost bits.
+        assert_eq!(stats.field_stream_failures, 0);
+        assert_eq!(stats.skipped_bits, 0);
+        assert_eq!(stats.fields, 0);
+        assert!(sink.stream_failures.is_empty());
+        assert!(sink.rep_layout_tails.is_empty());
+    }
+
+    #[test]
+    fn rep_layout_missing_terminator_keeps_the_emitted_prefix_counted() {
+        // Given: one complete field ending exactly at the block boundary.
+        let mut decoded_bits = vec![false];
+        decoded_bits.int_packed(1).int_packed(8).u8(0x5a);
+
+        // When: the walker reaches EOF where the next handle should begin.
+        let Run { stats, sink, .. } = decode_bits(&decoded_bits, None, TestSink::default());
+
+        // Then: the field stays emitted while failure accounting charges the block.
+        assert_eq!(sink.fields, vec![(0, 8)]);
+        assert_eq!(stats.fields, 1);
+        assert_eq!(stats.field_stream_failures, 1);
+        assert_eq!(stats.skipped_bits, 25);
+        assert_eq!(sink.stream_failures.len(), 1);
+        let failure = &sink.stream_failures[0];
+        assert_eq!(failure.cause, StreamFailureCause::ReadError);
+        assert_eq!(failure.consumed_bits, 25);
+        assert_eq!(failure.remaining_bits, 0);
+        assert_eq!(
+            (failure.record_handle, failure.record_offset),
+            (None, Some(25))
+        );
+        assert!(sink.rep_layout_tails.is_empty());
     }
 
     /// The RPC `Err` arm, same shape: one handle bit, then 0x01.

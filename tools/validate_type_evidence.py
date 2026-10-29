@@ -521,50 +521,51 @@ def validate(export_root: Path, specifications: list[dict], export_ids=None, com
     if compare_typed:
         columns += ["value_str", "value_i64", "value_f64", "value_bool"]
     for path in paths:
-        for batch in pq.ParquetFile(path).iter_batches(batch_size=131072, columns=columns, use_threads=False):
-            table = spec_rows(pa.Table.from_batches([batch]), wanted_groups, wanted_fields)
-            for row in table.to_pylist():
-                key = (row["group_path"], row["field_name"], row["compatible_checksum"])
-                if key not in expected:
-                    key = (row["group_path"], row["field_name"], None)
-                type_name = expected.get(key)
-                if type_name is None:
-                    continue
-                label = label_for(key)
-                counts[label] += 1
-                widths[label][row["bit_count"]] += 1
-                wire_keys[label][
-                    f"handle={row['handle']},checksum={row['compatible_checksum']},bits={row['bit_count']}"
-                ] += 1
-                try:
-                    value = decode_exact(row["raw_bits"], row["bit_count"], type_name)
-                    if compare_typed:
-                        exported = exported_value(row, type_name)
-                        matched, detail = values_match(type_name, value, exported)
-                        if detail is not None:
-                            location_scales[label][detail] += 1
-                        if not matched:
-                            typed_mismatch_count += 1
-                            if len(typed_mismatch_examples) < 32:
-                                typed_mismatch_examples.append({
-                                    "file": str(path), "field": label,
-                                    "decoded": value,
-                                    "exported": row[TYPED_COLUMNS[type_name]],
-                                })
-                    summary = _summary(type_name, value)
-                    if isinstance(summary, tuple):
-                        low = minima.get(label, summary)
-                        high = maxima.get(label, summary)
-                        minima[label] = tuple(map(min, low, summary))
-                        maxima[label] = tuple(map(max, high, summary))
-                    elif summary is not None:
-                        minima[label] = min(minima.get(label, summary), summary)
-                        maxima[label] = max(maxima.get(label, summary), summary)
-                except ValueError as exc:
-                    failure_count += 1
-                    failure_counts[label] += 1
-                    if len(failures) < 32:
-                        failures.append({"file": str(path), "field": label, "error": str(exc)})
+        with pq.ParquetFile(path, pre_buffer=False) as source:
+            for batch in source.iter_batches(batch_size=131072, columns=columns, use_threads=False):
+                table = spec_rows(pa.Table.from_batches([batch]), wanted_groups, wanted_fields)
+                for row in table.to_pylist():
+                    key = (row["group_path"], row["field_name"], row["compatible_checksum"])
+                    if key not in expected:
+                        key = (row["group_path"], row["field_name"], None)
+                    type_name = expected.get(key)
+                    if type_name is None:
+                        continue
+                    label = label_for(key)
+                    counts[label] += 1
+                    widths[label][row["bit_count"]] += 1
+                    wire_keys[label][
+                        f"handle={row['handle']},checksum={row['compatible_checksum']},bits={row['bit_count']}"
+                    ] += 1
+                    try:
+                        value = decode_exact(row["raw_bits"], row["bit_count"], type_name)
+                        if compare_typed:
+                            exported = exported_value(row, type_name)
+                            matched, detail = values_match(type_name, value, exported)
+                            if detail is not None:
+                                location_scales[label][detail] += 1
+                            if not matched:
+                                typed_mismatch_count += 1
+                                if len(typed_mismatch_examples) < 32:
+                                    typed_mismatch_examples.append({
+                                        "file": str(path), "field": label,
+                                        "decoded": value,
+                                        "exported": row[TYPED_COLUMNS[type_name]],
+                                    })
+                        summary = _summary(type_name, value)
+                        if isinstance(summary, tuple):
+                            low = minima.get(label, summary)
+                            high = maxima.get(label, summary)
+                            minima[label] = tuple(map(min, low, summary))
+                            maxima[label] = tuple(map(max, high, summary))
+                        elif summary is not None:
+                            minima[label] = min(minima.get(label, summary), summary)
+                            maxima[label] = max(maxima.get(label, summary), summary)
+                    except ValueError as exc:
+                        failure_count += 1
+                        failure_counts[label] += 1
+                        if len(failures) < 32:
+                            failures.append({"file": str(path), "field": label, "error": str(exc)})
     missing = [label_for(key) for key in expected if not counts[label_for(key)]]
     return {
         "fields": {

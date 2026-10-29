@@ -9,6 +9,12 @@ MAX_ELEMENTS = 4096
 MAX_FIELDS = 128
 
 
+def read_parquet(path, **options):
+    """Materialize one Parquet file and close its input before returning."""
+    with pa.OSFile(str(path), "rb") as source:
+        return pq.read_table(source, pre_buffer=False, **options)
+
+
 class InputError(ValueError):
     pass
 
@@ -184,7 +190,7 @@ def weapon_theme(raw, width):
 def load_net_guids(export, *columns):
     """{net_guid: its `columns`' values, one value for one column} from
     net_guids.parquet. The writer emits each GUID once, so a repeat raises."""
-    table = pq.read_table(export / "net_guids.parquet", columns=["net_guid", *columns], use_threads=False)
+    table = read_parquet(export / "net_guids.parquet", columns=["net_guid", *columns], use_threads=False)
     guids = table.column("net_guid").to_pylist()
     values = [table.column(column).to_pylist() for column in columns]
     out = dict(zip(guids, values[0] if len(columns) == 1 else zip(*values)))
@@ -202,8 +208,9 @@ def iter_selected(path, columns, mask):
     """(physical row ordinal, row) for each row of a Parquet file where
     `mask(batch)` holds; the filter runs in Arrow, before any row dict."""
     ordinal = 0
-    for batch in pq.ParquetFile(path).iter_batches(batch_size=65536, columns=columns, use_threads=False):
-        positions = pc.indices_nonzero(pc.fill_null(mask(batch), False))
-        for index, row in zip(positions.to_pylist(), batch.take(positions).to_pylist()):
-            yield ordinal + index, row
-        ordinal += batch.num_rows
+    with pq.ParquetFile(path, pre_buffer=False) as source:
+        for batch in source.iter_batches(batch_size=65536, columns=columns, use_threads=False):
+            positions = pc.indices_nonzero(pc.fill_null(mask(batch), False))
+            for index, row in zip(positions.to_pylist(), batch.take(positions).to_pylist()):
+                yield ordinal + index, row
+            ordinal += batch.num_rows

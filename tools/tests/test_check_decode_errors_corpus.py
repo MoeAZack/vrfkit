@@ -26,6 +26,7 @@ Truncated RPCs:    0
 RPC param walks:   338107
 CNC brute force:   454 attempted / 0 unwalked
 Movement tails:    0 sized (0 bits) / 0 open (0 bits)
+Movement section trailers: 0 streams / 0 bits
 Envelope trailers: 2380000 streams / 57120000 bits
 ActiveBlinds trailers: 3 empty deltas
 """
@@ -57,6 +58,7 @@ CLEAN_WITH_CHECKPOINTS = LIVE_EXPORT + """
   Checkpoint reward opaque: 7 empty variants
   Checkpoint movement: 0 failures
   Checkpoint movement tails: 0 sized (0 bits) / 0 open (0 bits)
+  Checkpoint movement section trailers: 0 streams / 0 bits
   Checkpoint envelope trailers: 0 streams / 0 bits
   Checkpoint ActiveBlinds trailers: 1 empty deltas
   Checkpoint CNC:   3 RPC rows
@@ -244,6 +246,7 @@ Truncated RPCs:    0
 RPC param walks:   20
 CNC brute force:   4 attempted / 0 unwalked
 Movement tails:    0 sized (0 bits) / 0 open (0 bits)
+Movement section trailers: 0 streams / 0 bits
 Envelope trailers: 5 streams / 120 bits
 ActiveBlinds trailers: 2 empty deltas
 """
@@ -260,6 +263,7 @@ CHECKPOINTS = """
   Checkpoint RPC walks: 0
   Checkpoint reward opaque: 0 empty variants
   Checkpoint movement tails: 0 sized (0 bits) / 0 open (0 bits)
+  Checkpoint movement section trailers: 0 streams / 0 bits
   Checkpoint envelope trailers: 0 streams / 0 bits
   Checkpoint ActiveBlinds trailers: 1 empty deltas
   Checkpoint CNC brute force: 0 attempted / 0 unwalked
@@ -339,6 +343,7 @@ class MainWiringTests(TempDirTestCase):
             "1 active effects / 1 ignore actors / 1 blinds / 1 projectile path",
             "CNC brute force: 4 attempted / 0 unwalked",
             "Movement tails: 0 sized (0 bits) / 0 open (0 bits)",
+            "Movement section trailers: 0 streams / 0 bits",
             "Envelope trailers: 5 streams / 120 bits", "ActiveBlinds trailers: 2 empty deltas",
             "Overlay: 500 decoded / 0 errors / 20 raw-skip / 5 not-in-table / 2 unnamed / "
             "4 conflicts / 1 effect blobs",
@@ -347,6 +352,7 @@ class MainWiringTests(TempDirTestCase):
             "Checkpoint leaf: 0 typed decode errors",
             "Checkpoint CNC brute force: 0 attempted / 0 unwalked",
             "Checkpoint movement tails: 0 sized (0 bits) / 0 open (0 bits)",
+            "Checkpoint movement section trailers: 0 streams / 0 bits",
             "Checkpoint envelope trailers: 0 streams / 0 bits",
             "Checkpoint ActiveBlinds trailers: 1 empty deltas",
         ):
@@ -354,23 +360,28 @@ class MainWiringTests(TempDirTestCase):
                 self.assertRegex(output, rf"(?m)^  {re.escape(line)}$")
         self.assertRegex(
             output, r"(?m)^  unbacked gates: CNC brute force unwalked \(.+\); "
-                    r"Movement tails sized \(.+\)$")
+                    r"Movement tails sized \(.+\); Movement section trailers streams "
+                    r"\(.+\); Movement section trailers bits \(.+\)$")
         self.assertRegex(
             output, r"(?m)^  checkpoint unbacked gates: Checkpoint fails movement \(.+\); "
                     r"Checkpoint fails truncated RPC \(.+\); Checkpoint movement tails sized "
                     r"\(.+\); Checkpoint movement tails open \(.+\); Checkpoint CNC brute "
-                    r"force unwalked \(.+\)$")
+                    r"force unwalked \(.+\); Checkpoint movement section trailers streams "
+                    r"\(.+\); Checkpoint movement section trailers bits \(.+\)$")
         ok = [line for line in output.splitlines() if line.startswith("OK:")]
         self.assertEqual(len(ok), 1, output)
         self.assertIn("11 backed by work that moved (Decoded OK 90, Struct blobs decoded 5, "
                       "Array decode elements 10, Array decode fields 40, Movement rows 100, "
-                      "RPC param walks 20), 2 with no work counter (CNC brute force unwalked, "
-                      "Movement tails sized)", ok[0])
+                      "RPC param walks 20), 4 with no work counter (CNC brute force unwalked, "
+                      "Movement tails sized, Movement section trailers streams, "
+                      "Movement section trailers bits)", ok[0])
         self.assertIn("8 backed by work that moved (Checkpoint Overlay decoded 500, "
                       "Checkpoint blobs decoded 8, Checkpoint array elements 30, Checkpoint "
-                      "array fields 90), 5 with no work counter (Checkpoint fails movement, "
+                      "array fields 90), 7 with no work counter (Checkpoint fails movement, "
                       "Checkpoint fails truncated RPC, Checkpoint movement tails sized, "
-                      "Checkpoint movement tails open, Checkpoint CNC brute force unwalked)",
+                      "Checkpoint movement tails open, Checkpoint CNC brute force unwalked, "
+                      "Checkpoint movement section trailers streams, "
+                      "Checkpoint movement section trailers bits)",
                       ok[0])
 
     def test_a_failure_counter_fails_the_run_in_each_pass(self):

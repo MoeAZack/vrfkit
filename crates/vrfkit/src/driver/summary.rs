@@ -205,6 +205,11 @@ pub(super) fn print(
         totals.sink.movement_open_section_tails,
         totals.sink.movement_open_section_tail_bits
     );
+    eprintln!(
+        "  Movement section trailers: {} streams / {} bits",
+        totals.sink.movement_sized_section_trailers,
+        totals.sink.movement_sized_section_trailer_bits
+    );
     // Every byte-wrapped movement stream and the bits after its envelope,
     // which nothing reads: 24 per stream on every measured replay.
     eprintln!(
@@ -476,6 +481,10 @@ fn print_checkpoints(cp: &CheckpointStats) {
         cp.sink.movement_open_section_tail_bits
     );
     eprintln!(
+        "  Checkpoint movement section trailers: {} streams / {} bits",
+        cp.sink.movement_sized_section_trailers, cp.sink.movement_sized_section_trailer_bits
+    );
+    eprintln!(
         "  Checkpoint envelope trailers: {} streams / {} bits",
         cp.sink.movement_envelope_trailers, cp.sink.movement_envelope_trailer_bits
     );
@@ -642,6 +651,48 @@ fn display_tail(value: &str, width: usize) -> String {
 mod tests {
     use super::{CHECKPOINT_TABLES, display_tail, file_size, stale_checkpoint_note, typed_share};
     use std::fs;
+
+    #[test]
+    fn movement_section_trailers_reach_main_and_checkpoint_summaries() {
+        // Given: zero controls, then different accumulated values in each pass.
+        let mut totals = super::RunTotals::default();
+        let mut cp = super::CheckpointStats::default();
+        for extra in [false, true] {
+            if extra {
+                let result = vrf_movement::RpcDecodeResult {
+                    sized_section_trailers: 1,
+                    sized_section_trailer_bits: 8,
+                    ..Default::default()
+                };
+                totals.sink.record_movement_decode(Ok(&result));
+                cp.sink.record_movement_decode(Ok(&result));
+                cp.sink.record_movement_decode(Ok(&result));
+            }
+            // When: the real summary functions consume the same sink counters
+            // that the manifest enumerates. Retained --nocapture output is
+            // independently checked by the movement audit parser.
+            let path = std::path::Path::new(".");
+            super::print(
+                path,
+                &vrf_net::stats::NetStats::default(),
+                &totals,
+                &vrf_decode::OverlayErrorReport::default(),
+                Some(&cp),
+                path,
+            );
+            // Then: each pass retains its own aggregate; no movement loss.
+            assert_eq!(
+                totals.sink.movement_sized_section_trailer_bits,
+                u64::from(extra) * 8
+            );
+            assert_eq!(
+                cp.sink.movement_sized_section_trailer_bits,
+                u64::from(extra) * 16
+            );
+            assert_eq!(totals.sink.movement_rpc_errors, 0);
+            assert_eq!(cp.sink.movement_rpc_errors, 0);
+        }
+    }
 
     fn temp_dir(tag: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("vrfkit_{tag}_{}", std::process::id()));

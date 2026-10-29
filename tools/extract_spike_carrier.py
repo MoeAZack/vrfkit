@@ -35,8 +35,9 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
-from atomic_io import atomic_write_file
+from atomic_io import atomic_write_file, refuse_input_path
 from player_identity import EARLIER_PROVENANCE, load_player_bodies
+from wire_bits import read_parquet
 
 BOMB_CLASS = "BombEquippable.BombEquippable_C"
 
@@ -49,7 +50,7 @@ LOOSE_CLASSES = ("EquippableGroundPickup_C", "EquippablePickupProjectile_C")
 #: The only field rows `build()` reads: the proxy `Instigator` walk, the
 #: `Owner` custody log and the AresInventory in-hand writes.
 FIELD_NAMES = ("Instigator", "Owner", "CurrentEquippable", "NewCurrentEquippable")
-FIELD_COLUMNS = ("time_ms", "actor_net_guid", "group_path", "field_name", "value_i64")
+FIELD_COLUMNS = ("time_ms", "packet_id", "actor_net_guid", "group_path", "field_name", "value_i64")
 
 
 def leaf(class_path: str | None) -> str:
@@ -72,28 +73,37 @@ def classify_owner(owner: int, owner_class: str | None,
     return "unknown", None, ""
 
 
-def carrier_at(held, t_ms: int):
-    """The custody interval covering `t_ms`, or None. A None `to_ms` (the
-    bomb actor never closed) runs to the end of the replay."""
-    covering = [r for r in held
+def carrier_at(rows, t_ms: int):
+    """Unambiguous carrier at an event time, from the whole ordered timeline.
+    A None `to_ms` covers the rest of the replay."""
+    # Events have no packet/row key comparable to Owner writes or actor closes.
+    # Include both sides of a timestamp tie: distinct owners, non-carriers or
+    # a terminal close are unresolved, not evidence for either event ordering.
+    # Repeated same-owner writes preserve attribution, including zero durations.
+    covering = [r for r in rows
                 if r["from_ms"] <= t_ms and (r["to_ms"] is None or t_ms <= r["to_ms"])]
-    return covering[-1] if covering else None
+    if not covering or covering[-1]["to_ms"] == t_ms:
+        return None
+    if any(r["holder_kind"] not in HELD_KINDS for r in covering):
+        return None
+    if len({(r["bomb_net_guid"], r["owner_net_guid"]) for r in covering}) != 1:
+        return None
+    return covering[-1]
 
 
 def unresolved(rows, events) -> list[str]:
     """What this extraction failed to resolve, one line each; any line makes
-    the exit nonzero: no custody at all, or a plant with NO CARRIER."""
+    the exit nonzero: no custody at all, or a plant without a proven carrier."""
     problems = []
     if not rows:
         problems.append(
             "no custody intervals at all: no BombEquippable_C.Owner writes "
             "were found, so an empty table was written")
-    held = [r for r in rows if r["holder_kind"] in HELD_KINDS]
     for group, t1 in zip(events.get("group", []), events.get("time1", [])):
-        if group == "spikePlanted" and carrier_at(held, t1) is None:
+        if group == "spikePlanted" and carrier_at(rows, t1) is None:
             problems.append(
-                f"plant at t={t1} resolves to NO CARRIER: no player or proxy "
-                f"held the spike at that moment")
+                f"plant at t={t1} has NO UNAMBIGUOUS CARRIER: custody is absent, "
+                f"non-carried, or tied with an unordered transition/close")
     return problems
 
 
@@ -104,12 +114,12 @@ def load(out_dir: Path):
 
     # Filtered in Arrow (~1% of the rows are read); the first Instigator write
     # per actor depends on the physical order Table.filter keeps.
-    fields = pq.read_table(out_dir / "fields.parquet", columns=list(FIELD_COLUMNS))
+    fields = read_parquet(out_dir / "fields.parquet", columns=list(FIELD_COLUMNS))
     fields = fields.filter(pc.is_in(fields.column("field_name"),
                                     value_set=pa.array(FIELD_NAMES)))
     f = {c: fields.column(c).to_pylist() for c in FIELD_COLUMNS}
 
-    actors = pq.read_table(out_dir / "actors.parquet")
+    actors = read_parquet(out_dir / "actors.parquet")
     a = {c: actors.column(c).to_pylist() for c in
          ("time_ms", "actor_net_guid", "event", "class_path")}
 
@@ -118,7 +128,7 @@ def load(out_dir: Path):
     events = {}
     ev_path = out_dir / "events.parquet"
     if ev_path.exists():
-        et = pq.read_table(ev_path)
+        et = read_parquet(ev_path)
         events = {c: et.column(c).to_pylist() for c in ("group", "time1", "metadata")}
     return f, a, manifest, events
 
@@ -168,24 +178,25 @@ def build(out_dir: Path):
     # owner_log: every Owner write on a bomb channel, sorted below;
     # in_hand: AresInventory (pawn, bomb) pairs with their timestamps.
     instigator: dict[int, int] = {}
-    owner_log: dict[int, list[tuple[int, int]]] = {}
+    owner_log: dict[int, list[tuple[int, int, int]]] = {}
     in_hand: dict[tuple[int, int], list[int]] = {}
-    for t, actor, grp, name, value in zip(
-            f["time_ms"], f["actor_net_guid"], f["group_path"], f["field_name"],
+    for t, packet, actor, grp, name, value in zip(
+            f["time_ms"], f["packet_id"], f["actor_net_guid"], f["group_path"], f["field_name"],
             f["value_i64"]):
         if name == "Instigator":
             if value:
                 instigator.setdefault(actor, value)
         elif name == "Owner":
             if BOMB_CLASS in grp and value is not None:
-                owner_log.setdefault(actor, []).append((t, value))
+                owner_log.setdefault(actor, []).append((t, packet, value))
         elif grp.endswith("AresInventory") and value in bombs:
             in_hand.setdefault((actor, value), []).append(t)
 
     rows: list[dict] = []
     for bomb, log in sorted(owner_log.items()):
-        log.sort()
-        for n, (t, owner) in enumerate(log):
+        # Stable sorting keeps physical row order within a timestamp/packet tie.
+        log.sort(key=lambda write: (write[0], write[1]))
+        for n, (t, _, owner) in enumerate(log):
             end = log[n + 1][0] if n + 1 < len(log) else bomb_close.get(bomb)
             cls = guid_class.get(owner)
             kind, carrier, proxy = classify_owner(
@@ -241,6 +252,15 @@ def main() -> int:
                     help="also print the timeline, carried intervals only")
     args = ap.parse_args()
 
+    # Only inputs: previous analysis outputs and hard links remain replaceable.
+    try:
+        refuse_input_path(args.out, [args.export / name for name in
+                                    ("fields.parquet", "actors.parquet",
+                                     "manifest.json", "events.parquet")])
+    except ValueError as exc:
+        print(f"FAILED: {exc}", file=sys.stderr)
+        return 1
+
     rows, events, malformed_round_meta, identity = build(args.export)
     cols = {name: [r[name] for r in rows] for name in SCHEMA.names}
     table = pa.Table.from_pydict(cols, schema=SCHEMA)
@@ -265,8 +285,8 @@ def main() -> int:
     for grp, t1 in zip(events.get("group", []), events.get("time1", [])):
         if grp != "spikePlanted":
             continue
-        who = carrier_at(held, t1)
-        tag = "NO CARRIER" if who is None else (
+        who = carrier_at(rows, t1)
+        tag = "NO UNAMBIGUOUS CARRIER" if who is None else (
             f"{(who['carrier_subject'] or '?')[:8]} pawn={who['carrier_pawn_guid']}"
             + (f" via {who['via_proxy_class']}" if who["via_proxy_class"] else ""))
         round_disp = who["round_number"] if who and who["round_number"] is not None else "?"

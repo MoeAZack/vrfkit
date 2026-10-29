@@ -17,7 +17,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 
-from support import TempDirTestCase
+from support import TempDirTestCase, read_parquet
 import to_valplay_bundle as bundle
 
 
@@ -404,7 +404,7 @@ class MovementLineAssemblyTests(TempDirTestCase):
                 root = self.tmp()
                 path = root / "movement.parquet"
                 write_table(path, oracle_rows()[:3], SPECS["movement"])
-                table = pq.read_table(path)
+                table = read_parquet(path)
                 index = table.schema.get_field_index(column)
                 values = table.column(column).to_pylist()
                 values[1] = None
@@ -725,6 +725,91 @@ class EffectFramingTallyTests(unittest.TestCase):
         self.assertEqual(tally["effect_array_residual_bits"], 0)
 
 
+class EffectPayloadWindowTests(unittest.TestCase):
+    def test_recorded_short_float_is_rejected_but_full_width_decodes(self):
+        for declared, raw, expected, half_read in (
+            (1, "020210100212020000803f0000", [(1, None)], 1),
+            (32, "020210100212400000803f0000", [(1, 1.0)], 0),
+        ):
+            with self.subTest(declared=declared):
+                # Given: the same float bytes, with different declared windows.
+                data = bytes.fromhex(raw)
+                tally = bundle._Tally()
+
+                # When
+                elements = bundle._decode_effect_elements(
+                    data, len(data) * 8, bundle._EFFECT_FLOATS, tally)
+
+                # Then: neighboring bytes cannot supply a short float.
+                self.assertEqual(elements, expected)
+                self.assertEqual(tally["effect_half_read_pairs"], half_read)
+                self.assertEqual(tally["effect_array_residual_bits"], half_read)
+
+    def test_short_tag_preserves_its_value_and_the_next_element(self):
+        # Given: a one-bit tag, a full float 1.0, then tag 2 / float 2.0.
+        data = bytes.fromhex("0402100225800000007f0008202008248000000080000000")
+        tally = bundle._Tally()
+
+        # When: the blob ends at bit 185, not at the padded byte boundary.
+        elements = bundle._decode_effect_elements(data, 185, bundle._EFFECT_FLOATS, tally)
+
+        # Then
+        self.assertEqual(elements, [(None, 1.0), (2, 2.0)])
+        self.assertEqual(tally["effect_half_read_pairs"], 1)
+        self.assertEqual(tally["effect_array_residual_bits"], 0)
+
+    def test_short_values_preserve_the_next_element_for_each_array_kind(self):
+        for spec, raw, bits, value in (
+            (bundle._EFFECT_FLOATS, "040210100212020008202008248000000080000000",
+             161, 2.0),
+            (bundle._EFFECT_OBJECTS, "040220100222020008402008442008000000",
+             137, 2),
+            (bundle._EFFECT_VECTORS,
+             "04021810021a020008302008340205000000000000000000000000000000000000000000000000000000",
+             329, (0.0, 0.0, 0.0)),
+        ):
+            with self.subTest(spec=spec):
+                # Given: tag 1 / a one-bit value, followed by a complete pair.
+                data = bytes.fromhex(raw)
+                tally = bundle._Tally()
+
+                # When
+                elements = bundle._decode_effect_elements(data, bits, spec, tally)
+
+                # Then: the second pair survives even when not byte-aligned.
+                self.assertEqual(elements, [(1, None), (2, value)])
+                self.assertEqual(tally["effect_half_read_pairs"], 1)
+                self.assertEqual(tally["effect_array_residual_bits"], 0)
+
+    def test_malformed_shot_keeps_scalar_parameters_and_raw_rpc_evidence(self):
+        # Given: malformed ammo plus an independent scalar on the same shot.
+        data = bytes.fromhex("020210100212020000803f0000")
+        common = {"time_ms": 30, "packet_id": 3, "actor": 2, "object": 22,
+                  "group_path": SHOT_RPC, "handle": 9}
+        rows = [
+            {**common, "field_name": "ReplayPlayContinuousEffectAtLocation.FloatValues",
+             "raw_bits": data, "bit_count": 96},
+            {**common, "field_name": "ReplayPlayContinuousEffectAtLocation.EffectID",
+             "value_i64": 42, "bit_count": 8},
+        ]
+        manifest = {"net_field_export_groups": [{
+            "path": "NetworkGameplayTagNodeIndex",
+            "fields": [{"handle": 1, "name": "FiringState.AmmoRemaining"}],
+        }]}
+
+        # When
+        result = run(rows, manifest=manifest)
+
+        # Then: no fabricated ammo, and the raw source remains available.
+        (shot,) = result.events("valorant_shot_received")
+        (rpc,) = result.events("rpc_received")
+        self.assertIsNone(shot["shot"]["ammo_remaining"])
+        self.assertEqual(shot["shot"]["effect_id"], 42)
+        self.assertEqual(rpc["payload"]["FloatValues"],
+                         {"BitCount": 96, "Data": base64.b64encode(data).decode("ascii")})
+        self.assertEqual(result.tally["effect_half_read_pairs"], 1)
+
+
 class ShotEffectRawSourceTests(unittest.TestCase):
     """An additive Rust JSON overlay must not replace the shot wire source."""
 
@@ -1032,6 +1117,60 @@ class RpcCollisionTallyTests(unittest.TestCase):
              "value_i64": 2},
         ]
         self.assertEqual(run(rows).tally["rpc_param_collisions"], 0)
+
+
+class RpcObjectIdentityTests(unittest.TestCase):
+    def test_distinct_subobjects_keep_their_own_parameters(self):
+        # Given: the packet, actor, group and handle agree, but objects differ.
+        common = {
+            "time_ms": 40, "packet_id": 5, "actor": 3,
+            "group_path": RPC_GROUP, "handle": 7, "bit_count": 8,
+        }
+        rows = [
+            {**common, "object": 20, "field_name": "Fn.A", "value_i64": 11},
+            {**common, "object": 30, "field_name": "Fn.B", "value_i64": 22},
+        ]
+
+        # When: real Parquet rows are converted and their NDJSON is read.
+        result = run(rows)
+
+        # Then: no consumer sees a combined invocation.
+        self.assertEqual(
+            [e["payload"] for e in result.events("rpc_received")],
+            [{"A": 11}, {"B": 22}],
+        )
+        self.assertEqual(
+            [(e["object_net_guid"], e["payload"]) for e in result.events("rpc_received")],
+            [(20, {"A": 11}), (30, {"B": 22})],
+        )
+        self.assertEqual(result.tally["rpc_param_collisions"], 0)
+
+    def test_shots_preserve_actor_rows_and_each_real_object_identity(self):
+        # Given: None is an actor row, not object 0 or the actor's own GUID.
+        objects = (None, 0, 3, 20, 30)
+        rows = [{
+            "time_ms": 40, "packet_id": 5, "actor": 3, "object": obj,
+            "group_path": SHOT_RPC, "handle": 7, "bit_count": 8,
+            "field_name": "ReplayPlayContinuousEffectAtLocation.EffectID",
+            "value_i64": index,
+        } for index, obj in enumerate(objects)]
+
+        # When
+        result = run(rows)
+
+        # Then: both consumers retain identity and the corresponding parameter.
+        self.assertEqual(len(result.events("valorant_shot_received")), 5)
+        self.assertEqual(
+            [(e["object_net_guid"], e["payload"]["EffectID"])
+             for e in result.events("rpc_received")],
+            list(zip(objects, range(5))),
+        )
+        self.assertEqual(
+            [(e["object_net_guid"], e["shot"]["effect_id"])
+             for e in result.events("valorant_shot_received")],
+            list(zip(objects, range(5))),
+        )
+        self.assertEqual(result.tally["rpc_param_collisions"], 0)
 
 
 class PropertyKeyCollisionTallyTests(unittest.TestCase):

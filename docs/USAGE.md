@@ -241,6 +241,14 @@ child rows, and `RPC param walks` the RPC parameter walks that `Truncated
 RPCs` is a share of. `--checkpoints` prints the same lines as `Checkpoint
 route children:` and `Checkpoint RPC walks:`.
 
+`Movement section trailers` and `Checkpoint movement section trailers` count
+components and bits left outside a fitting, nonzero `movementBitCount` window.
+They are separate from the unread bits inside a sized/open section and from
+the byte-envelope trailers. Both lines print even at zero. The common build
+audit and decode-error corpus guard reject nonzero section trailers.
+The baseline guard validates and prints these fresh counts against the
+manifest without adding guessed measurements to older baseline snapshots.
+
 `Struct blobs` is the output of the dedicated decoders for `RoundResults` /
 `TeamEconomy` / `RoundInfos`. These decoders are **additive**, so failing
 completely does not move a single other counter -- when build 13.02 shifted a
@@ -672,7 +680,7 @@ Take only the layer you need. Every crate is `#![forbid(unsafe_code)]`, and
 | Layer | Crate | Feature flags |
 |---|---|---|
 | Bit reader / UE wire format | `vrf-bitio` | `alloc` (default; drop it for `no_std`) |
-| Payload transform (25 builds) | `vrf-transform` | none |
+| Payload transform (26 builds) | `vrf-transform` | none |
 | Container (info/header/chunk/event/checkpoint, Oodle) | `vrf-container` | `oodle` `event` `checkpoint` |
 | DemoFrame traversal | `vrf-frame` | none |
 | Dynamic schema + GUID cache + checkpoint tables | `vrf-schema` | `checkpoint` |
@@ -911,6 +919,15 @@ An export with no `quality` object is forwarded as `"quality": null`, never as
 zeroes: a consumer must be able to tell "nothing was lost" from "nobody
 counted".
 
+RPC grouping retains packet, actor, nullable subobject, group and function
+handle. `rpc_received` and shot events retain `object_net_guid` as null for
+actor rows, distinct from a real subobject GUID; consumers needing an effective
+target must make their actor fallback explicit. Repeated invocations on the
+same object in one packet remain a separate, counted collision limitation.
+Each effect-array tag and value is read inside its declared field window.
+A short field cannot consume a neighboring field; unreadable halves enter
+`effect_half_read_pairs`.
+
 `events.parquet` crosses as additive `server_timeline_event` rows through a
 deliberately narrow allowlist: server `event_group`, `time_ms`, `time2_ms`, and
 only `word0`/`word1` for groups whose fixed payload arity Rust already
@@ -997,7 +1014,7 @@ per-class level itself is pinned by the Rust test
 The shipped `tools/fixtures/type_evidence.json` covers the `ADDITIONS` and
 the checksum-scoped wire entries of the table, one entry per exported group
 that carries each; they were checked on every row of the 1,018-replay audit
-exports and with `--compare-typed` on fresh exports of all 25 builds. The last
+exports and with `--compare-typed` on fresh exports of all 24 builds. The last
 seven entries are the bomb-objective and ult-orb RPC parameters
 (`BombPlantedRPC.BombPlanter` / `PlantSite`, `BombDefusedRPC.DefusingCharacter`,
 `OrbPickedUpRPC.Orb Gatherer` / `Collectable Orb` on the Bomb and Swiftplay game
@@ -1103,7 +1120,7 @@ schema drift, not meaning.
 
 The pre-PR sweep, and what CI runs, is in
 [CONTRIBUTING.md](../CONTRIBUTING.md#before-you-open-a-pr); the suites have
-708 Rust tests and 1046 Python tests.
+739 Rust tests (Windows), 738 Rust tests (non-Windows), and 1074 Python tests.
 
 **The ASCII rule is correctness, not style.** The Windows console is cp949, so a
 single non-ASCII character in a format string truncates output at that point.
@@ -1295,8 +1312,8 @@ Only analysis copies are written; both input and output hashes are checked.
 Use `--build 11.06` to select one build, or omit it for all seven.
 
 `capture_native_transforms.py --binaries <archive-root> --recovered-binaries <recovered-root> --check`
-verifies all 1,264 committed 11.06--12.09 vectors against the pinned native
-PE readers. It requires optional `pefile` and `unicorn` packages and the
+verifies all 1,422 committed vectors (11.06--12.09, 13.08 and 13.09) against the
+pinned native PE readers. It requires optional `pefile` and `unicorn` packages and the
 executable layout documented in [LEGACY_BUILD_SUPPORT.md](LEGACY_BUILD_SUPPORT.md).
 Without `--check`, it regenerates `crates/vrf-transform/tests/data/native_vectors.rs`.
 Ordinary tests read the vectors without requiring proprietary binaries or an

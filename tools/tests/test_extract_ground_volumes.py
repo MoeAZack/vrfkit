@@ -14,7 +14,7 @@ from unittest.mock import patch
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from support import TempDirTestCase, run_cli
+from support import TempDirTestCase, read_parquet, run_cli
 import extract_ground_volumes as gv
 from check_checksum_types import chain_checksum
 from wire_fixtures import BitWriter
@@ -453,13 +453,13 @@ class SchemaTests(TempDirTestCase):
              "compatible_checksum": 3454040167, "rendered_name": "Floor"}])
         # The checkpoint row names handle 43 only if it joins the class
         # group; give the class group its own checkpoint declaration.
-        groups_table = pq.read_table(source / "checkpoint_export_groups.parquet").to_pylist()
+        groups_table = read_parquet(source / "checkpoint_export_groups.parquet").to_pylist()
         groups_table.append({"checkpoint_index": 0, "path_name_index": 7,
                              "group_path": gv.CLASS_GROUP, "declared_slots": 46})
         pq.write_table(table(groups_table, {"checkpoint_index": pa.uint32(), "path_name_index": pa.uint32(),
                                             "group_path": pa.string(), "declared_slots": pa.uint32()}),
                        source / "checkpoint_export_groups.parquet")
-        fields = pq.read_table(source / "checkpoint_export_fields.parquet").to_pylist()
+        fields = read_parquet(source / "checkpoint_export_fields.parquet").to_pylist()
         fields[0]["path_name_index"] = 7
         pq.write_table(table(fields, {"checkpoint_index": pa.uint32(), "path_name_index": pa.uint32(),
                                       "handle": pa.uint32(), "compatible_checksum": pa.uint32(),

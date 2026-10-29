@@ -57,7 +57,22 @@ impl Container {
         let last = (chunk.offset + want - 1) / block_size;
         let mut out = Vec::with_capacity(((last - first + 1) * block_size) as usize);
         for index in first..=last {
-            self.read_block(ucas, index as usize, &mut out)?;
+            let block = self.read_block(ucas, index as usize)?;
+            // Intermediate blocks must exactly fill their virtual stride; the
+            // last touched block only needs to reach the requested prefix end.
+            let required =
+                usize::try_from((chunk.offset + want - index * block_size).min(block_size))
+                    .map_err(|_| {
+                        Error(format!("{}: block span exceeds address space", self.name))
+                    })?;
+            if block.len() < required || (index < last && block.len() > required) {
+                return fail(format!(
+                    "{}: block {index} needs {required} virtual bytes, decoded {}",
+                    self.name,
+                    block.len()
+                ));
+            }
+            out.extend_from_slice(&block);
         }
         let start = (chunk.offset - first * block_size) as usize;
         let end = start + want as usize;
@@ -73,12 +88,7 @@ impl Container {
         Ok(out)
     }
 
-    fn read_block(
-        &self,
-        ucas: &mut (impl Read + Seek),
-        index: usize,
-        out: &mut Vec<u8>,
-    ) -> Result<()> {
+    fn read_block(&self, ucas: &mut (impl Read + Seek), index: usize) -> Result<Vec<u8>> {
         let Some(block) = self.toc.blocks.get(index) else {
             return fail(format!("{}: block {index} out of range", self.name));
         };
@@ -99,17 +109,16 @@ impl Container {
                         self.name, block.compressed_size, block.uncompressed_size
                     ));
                 }
-                out.extend_from_slice(&raw);
+                Ok(raw)
             }
             Some("Oodle") => {
                 let size = block.uncompressed_size as usize;
-                let start = out.len();
-                out.resize(start + size, 0);
+                let mut decoded = vec![0u8; size];
                 // A fresh extractor per block (it keeps decoder state across
                 // calls), and `read` over a slice so unread input shows.
                 let mut unread: &[u8] = &raw;
                 let n = oozextract::Extractor::new()
-                    .read(&mut unread, &mut out[start..])
+                    .read(&mut unread, &mut decoded)
                     .map_err(|e| Error(format!("{}: block {index}: Oodle: {e:?}", self.name)))?;
                 if n != size {
                     return fail(format!(
@@ -125,15 +134,13 @@ impl Container {
                         raw.len()
                     ));
                 }
+                Ok(decoded)
             }
-            Some(other) => {
-                return fail(format!(
-                    "{}: block {index} uses compression method {other:?}, which this tool does not read",
-                    self.name
-                ));
-            }
+            Some(other) => fail(format!(
+                "{}: block {index} uses compression method {other:?}, which this tool does not read",
+                self.name
+            )),
         }
-        Ok(())
     }
 }
 
@@ -177,6 +184,66 @@ mod tests {
         ucas.truncate(20);
         let mut f = IoCursor::new(ucas);
         assert!(c.read_chunk(&mut f, 0, u64::MAX).is_err());
+    }
+
+    #[test]
+    fn a_short_intermediate_block_cannot_fill_its_gap_from_the_next_block() {
+        // Given the recorded stride-8 blocks with decoded lengths 4 and 8.
+        let spec = one_chunk_toc(1, (0, 12), 8, vec![], &[(0, 4, 4, 0), (4, 8, 8, 0)]);
+        let c = container(&spec);
+        let mut f = IoCursor::new((0u8..12).collect::<Vec<_>>());
+        // When reading the entire chunk.
+        let result = c.read_chunk(&mut f, 0, u64::MAX);
+        // Then the virtual gap is rejected, not filled by the next block.
+        assert!(result.is_err(), "{result:?}");
+    }
+
+    #[test]
+    fn an_oversized_intermediate_block_cannot_shift_the_following_block() {
+        // Given a stride-8 chunk with decoded block lengths 12 and 8.
+        let spec = one_chunk_toc(1, (0, 12), 8, vec![], &[(0, 12, 12, 0), (12, 8, 8, 0)]);
+        let c = container(&spec);
+        let mut f = IoCursor::new((0u8..20).collect::<Vec<_>>());
+        // When the read crosses the first virtual block boundary.
+        let result = c.read_chunk(&mut f, 0, u64::MAX);
+        // Then excess bytes cannot replace the following block's bytes.
+        assert!(result.is_err(), "{result:?}");
+    }
+
+    #[test]
+    fn a_partial_read_crossing_a_short_block_is_rejected() {
+        // Given a read beginning inside the short intermediate block.
+        let spec = one_chunk_toc(1, (2, 10), 8, vec![], &[(0, 4, 4, 0), (4, 8, 8, 0)]);
+        let c = container(&spec);
+        let mut f = IoCursor::new((0u8..12).collect::<Vec<_>>());
+        // When the prefix reaches into the next block.
+        let result = c.read_chunk(&mut f, 0, 8);
+        // Then the first block's missing virtual bytes remain an error.
+        assert!(result.is_err(), "{result:?}");
+    }
+
+    #[test]
+    fn a_partial_read_within_a_short_block_is_valid() {
+        // Given the same short intermediate block.
+        let spec = one_chunk_toc(1, (2, 10), 8, vec![], &[(0, 4, 4, 0), (4, 8, 8, 0)]);
+        let c = container(&spec);
+        let mut f = IoCursor::new((0u8..4).collect::<Vec<_>>());
+        // When the requested prefix ends at the available decoded boundary.
+        let bytes = c.read_chunk(&mut f, 0, 2).unwrap();
+        // Then only the requested bytes are returned; block 1 is never read.
+        assert_eq!(bytes, [2, 3]);
+    }
+
+    #[test]
+    fn a_short_final_block_supplies_the_chunk_tail() {
+        // Given a complete intermediate block and a four-byte final block.
+        let spec = one_chunk_toc(1, (2, 10), 8, vec![], &[(0, 8, 8, 0), (8, 4, 4, 0)]);
+        let c = container(&spec);
+        let mut f = IoCursor::new((0u8..12).collect::<Vec<_>>());
+        // When reading through the short final block.
+        let bytes = c.read_chunk(&mut f, 0, u64::MAX).unwrap();
+        // Then the chunk has its exact virtual bytes.
+        assert_eq!(bytes, (2u8..12).collect::<Vec<_>>());
     }
 
     #[test]

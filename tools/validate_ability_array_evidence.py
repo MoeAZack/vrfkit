@@ -185,13 +185,14 @@ def relevant_rows(export: Path, compare_typed: bool):
             "handle", "value_i64", "value_f64", "value_bool", "value_str",
         ]
     parents = [key[1] for key in ROUTES]
-    for batch in pq.ParquetFile(export / "fields.parquet").iter_batches(batch_size=65536, columns=columns):
-        names = pc.cast(batch["field_name"], pa.string())
-        mask = pc.is_in(names, value_set=pa.array(parents))
-        if compare_typed:
-            for parent in parents:
-                mask = pc.or_(mask, pc.starts_with(names, parent + "["))
-        yield from batch.filter(pc.fill_null(mask, False)).to_pylist()
+    with pq.ParquetFile(export / "fields.parquet", pre_buffer=False) as source:
+        for batch in source.iter_batches(batch_size=65536, columns=columns):
+            names = pc.cast(batch["field_name"], pa.string())
+            mask = pc.is_in(names, value_set=pa.array(parents))
+            if compare_typed:
+                for parent in parents:
+                    mask = pc.or_(mask, pc.starts_with(names, parent + "["))
+            yield from batch.filter(pc.fill_null(mask, False)).to_pylist()
 
 
 def main(argv=None) -> int:

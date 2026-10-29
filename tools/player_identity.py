@@ -20,7 +20,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
-import pyarrow.parquet as pq
+from wire_bits import read_parquet
 
 #: The PlayerState classes that replicate `SpawnedCharacter`: Bomb, and the
 #: Swiftplay alias `GROUP_ALIASES` in crates/vrf-decode/src/overlay.rs maps to
@@ -72,7 +72,7 @@ class PlayerBodies:
 
 def spawned_character_rows(fields_path: Path) -> list[dict]:
     """Every `SpawnedCharacter` row of a main `fields.parquet`, any group."""
-    table = pq.read_table(fields_path, columns=_COLUMNS,
+    table = read_parquet(fields_path, columns=_COLUMNS,
                           filters=[("field_name", "==", "SpawnedCharacter")])
     return table.to_pylist()
 

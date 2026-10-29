@@ -13,11 +13,10 @@ import struct
 
 import pyarrow as pa
 import pyarrow.compute as pc
-import pyarrow.parquet as pq
 
 import extract_kill_observations as observation_extractor, kill_state
 from atomic_io import run_json_cli, sha256_file as file_sha
-from wire_bits import InputError, exact_ref, iter_selected, text
+from wire_bits import InputError, exact_ref, iter_selected, read_parquet, text
 
 #: Matched lags measure 5-41 ms; a 100 ms cap changed no match.
 MAX_REPLICATION_LAG_MS = 50
@@ -232,12 +231,12 @@ def extract(export):
     manifest = json.loads((export/'manifest.json').read_text(encoding='utf-8'))
     observations = observation_extractor.extract(export)
     projection = kill_state.project_kill_state(observations)
-    actor_rows = pq.read_table(export/'actors.parquet',use_threads=False).to_pylist()
+    actor_rows = read_parquet(export/'actors.parquet',use_threads=False).to_pylist()
     identity = ActorIdentityIndex(actor_rows,player_state_rows(export/'fields.parquet'))
     deaths = []
     identity_counts = Counter({side+':'+status: 0 for side in ('killer', 'victim')
                                for status in IDENTITY_STATUSES})
-    event_rows = pq.read_table(export/'events.parquet',use_threads=False).to_pylist()
+    event_rows = read_parquet(export/'events.parquet',use_threads=False).to_pylist()
     rounds = []
     for ordinal, row in enumerate(event_rows):
         if row['group'] == 'roundStarted':

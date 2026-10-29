@@ -8,7 +8,7 @@ from unittest.mock import patch
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from support import TempDirTestCase, run_cli
+from support import TempDirTestCase, retained_parquet_readers, run_cli
 import extract_fastarray_observations as fast
 from wire_fixtures import packed
 
@@ -188,7 +188,10 @@ class FastArrayTests(TempDirTestCase):
         source = write_export(root, "++Ares-Core+release-12.10",
                               fields=[field_row(("unrelated", "x"), raw, count), chained],
                               checkpoint=[chained])
-        receipt = fast.extract(source, root / "result")
+        with retained_parquet_readers() as readers:
+            receipt = fast.extract(source, root / "result")
+            self.assertTrue(readers)
+            self.assertTrue(all(reader.closed for reader in readers))
         counts = receipt["counts"]
         self.assertEqual((counts["fields_rows"], counts["checkpoint_fields_rows"]), (1, 1))
         self.assertEqual((counts["rows"], counts["structural_exact"], counts["rejected"]), (2, 2, 0))

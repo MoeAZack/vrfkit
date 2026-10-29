@@ -320,6 +320,49 @@ class TestCountTests(unittest.TestCase):
         self.assertIn("Rust", claims)
 
 
+class PlatformTestCountTests(unittest.TestCase):
+    DOCS = {
+        "README.md": "387 Rust tests (Windows)\n386 Rust tests (non-Windows)\n120 Python tests",
+        "USAGE.md": "387 passing (Windows)\n386 passing (non-Windows)\n120 passing",
+    }
+
+    def test_each_platform_checks_its_own_live_suite_counts(self):
+        for platform, rust in (("Windows", 387), ("non-Windows", 386)):
+            with self.subTest(platform=platform):
+                by_suite = {"Rust": {str(rust)}, "Python": {"120"}}
+                live = by_suite["Rust"] | by_suite["Python"]
+                for text in self.DOCS.values():
+                    self.assertEqual(guard.stale_test_counts(
+                        text, live, by_suite, platform=platform), [])
+                self.assertEqual(guard.unquoted_test_counts(
+                    self.DOCS, {"rust": rust, "tools": 120}, platform=platform), [])
+
+    def test_a_stale_count_on_the_selected_platform_is_not_excused(self):
+        text = "387 Rust tests (Windows)\n385 Rust tests (non-Windows)\n120 Python tests"
+        self.assertEqual(guard.stale_test_counts(
+            text, {"386", "120"}, platform="non-Windows"), [(2, "385")])
+        self.assertEqual(guard.stale_test_counts(
+            text, {"387", "120"}, platform="Windows"), [])
+
+    def test_an_unqualified_count_still_applies_on_every_platform(self):
+        self.assertEqual(guard.stale_test_counts(
+            "385 Rust tests\n386 Rust tests (non-Windows)",
+            {"386", "120"}, platform="non-Windows"), [(1, "385")])
+
+    def test_another_platforms_count_cannot_satisfy_a_missing_local_claim(self):
+        self.assertEqual(len(guard.unquoted_test_counts(
+            {"a.md": "387 Rust tests (Windows)\n120 Python tests"},
+            {"rust": 386, "tools": 120}, platform="non-Windows")), 1)
+
+    def test_two_platform_specific_rust_counts_are_not_a_contradiction(self):
+        self.assertEqual(guard.contradicting_test_counts(self.DOCS), [])
+
+    def test_a_third_count_within_one_platform_is_a_contradiction(self):
+        docs = dict(self.DOCS)
+        docs["README.md"] += "\n385 Rust tests (non-Windows)"
+        self.assertTrue(guard.contradicting_test_counts(docs))
+
+
 class TableSizeClaimTests(unittest.TestCase):
     """Every number that claims to BE a table size must be the live one, even
     one line from the correct one."""

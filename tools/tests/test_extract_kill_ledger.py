@@ -10,7 +10,7 @@ import unittest
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from support import TempDirTestCase
+from support import TempDirTestCase, read_parquet
 import extract_kill_ledger as tool
 from test_extract_kill_observations import SCHEMA, array, row as field_row
 from wire_fixtures import write_empty_tables
@@ -221,7 +221,7 @@ class IntegrationTests(TempDirTestCase):
     def test_missing_raw_event_is_retained_unjoined(self):
         t = self.tmp()
         export=make_export(t/'export'); path=export/'events.parquet'
-        table=pq.read_table(path); rows=table.to_pylist(); rows[1]['raw_payload']=None
+        table=read_parquet(path); rows=table.to_pylist(); rows[1]['raw_payload']=None
         pq.write_table(pa.Table.from_pylist(rows,schema=table.schema),path)
         got=tool.extract(export)
         self.assertEqual(got['counts']['matched_pairs'],0)
@@ -234,7 +234,7 @@ class IntegrationTests(TempDirTestCase):
                                                 (0,None,'unorderable_round')):
             with self.subTest(event_index=event_index), tempfile.TemporaryDirectory() as t:
                 export=make_export(Path(t)/'export'); path=export/'events.parquet'
-                table=pq.read_table(path); rows=table.to_pylist(); rows[event_index]['time1']=None
+                table=read_parquet(path); rows=table.to_pylist(); rows[event_index]['time1']=None
                 pq.write_table(pa.Table.from_pylist(rows,schema=table.schema),path)
                 got=tool.extract(export)
                 self.assertEqual(got['counts']['matched_pairs'],0)
@@ -245,7 +245,7 @@ class IntegrationTests(TempDirTestCase):
     def test_different_killer_context_remains_unjoined(self):
         t = self.tmp()
         export=make_export(t/'export'); path=export/'fields.parquet'
-        table=pq.read_table(path); rows=table.to_pylist()
+        table=read_parquet(path); rows=table.to_pylist()
         rows[0].update(value_i64=21,raw_bits=b'\x2a')
         pq.write_table(pa.Table.from_pylist(rows,schema=table.schema),path)
         got=tool.extract(export)

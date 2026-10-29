@@ -45,14 +45,14 @@ pub struct MovementUpdate {
 pub struct RpcDecodeResult {
     /// Total moves decoded across all updates.
     pub total_moves: u32,
-    /// Number of character updates in the batch.
+    /// Declared array capacity, not the number of changed character updates.
     pub update_count: u32,
     /// Losses, per occurrence; nonzero keeps the batch's payload as a raw row.
     /// A failed component stream loses itself, a failed framing read the rest
     /// of its updates array. Also counted, as each would otherwise look like
     /// empty updates: an index past the declared count, a field longer than its
     /// window, a shooter-GUID field not 32 bits wide, a stream with no GUID,
-    /// and bits after the array's zero index other than one IntPacked byte.
+    /// a missing array zero index, and bits after it other than one IntPacked byte.
     pub error_count: u32,
     /// Sections in a `movementBitCount`-sized window that stopped with bits
     /// unread: at a zero marker (a drifted cursor loses every later move), or
@@ -66,6 +66,12 @@ pub struct RpcDecodeResult {
     pub open_section_tails: u32,
     /// Bits left unread by the sections counted in [`Self::open_section_tails`].
     pub open_section_tail_bits: u64,
+    /// Components with bits after a nonzero, fitting `movementBitCount`
+    /// window. Separate from unread bits inside it and outside the envelope.
+    pub sized_section_trailers: u32,
+    /// Bits after the windows counted in [`Self::sized_section_trailers`],
+    /// tallied even when parsing the section fails. A tally, not an error.
+    pub sized_section_trailer_bits: u64,
     /// Byte-wrapped streams, counted when the envelope is cut out, before its
     /// section is parsed and whether or not bits follow: a vanished trailer
     /// reads as bits short of 24 per stream.

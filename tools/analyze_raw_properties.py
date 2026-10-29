@@ -213,93 +213,93 @@ def analyze_export(
     if build is None:
         raise ValueError("manifest has no release build label")
 
-    parquet = pq.ParquetFile(fields_path)
-    missing = set(FIELD_COLUMNS) - set(parquet.schema_arrow.names)
-    if missing:
-        raise ValueError(
-            f"fields.parquet is missing {len(missing)} required column(s)"
-        )
-
-    # The adapter's key for one property update. Actor and object IDs group
-    # this replay only; never copied into Inventory, they cannot be reported.
-    unnamed_blocks: dict[
-        tuple[int, int, int, int | None, str],
-        list[tuple[int, int | None, int]],
-    ] = defaultdict(list)
-
-    def add(counter: Counter[str], mask) -> None:
-        counter[build] += pc.sum(pc.cast(mask, pa.int64())).as_py() or 0
-
-    def present(column):
-        # Decoded first: a dictionary column's null can sit in its values.
-        if pa.types.is_dictionary(column.type):
-            column = pc.cast(column, pa.string())
-        return pc.is_valid(column)
-
-    # Only unnamed property rows with a payload (under 0.2% of a 13.06 export)
-    # reach Python, in physical order; every other counter is an Arrow mask sum.
-    for batch in parquet.iter_batches(columns=list(FIELD_COLUMNS)):
-        group_paths = pc.cast(batch.column("group_path"), pa.string())
-        if group_paths.null_count:
-            raise ValueError("fields.parquet: null group_path")
-        inventory.field_rows[build] += batch.num_rows
-        prop = pc.invert(pc.match_substring(group_paths, CLASS_NET_CACHE_SUFFIX))
-        typed = present(batch.column(TYPED_COLUMNS[0]))
-        for name in TYPED_COLUMNS[1:]:
-            typed = pc.or_(typed, present(batch.column(name)))
-        named = present(batch.column("field_name"))
-        has_raw = present(batch.column("raw_bits"))
-        raw_only = pc.and_(prop, pc.and_(has_raw, pc.invert(typed)))
-        unnamed = pc.and_(prop, pc.invert(named))
-        add(inventory.property_rows, prop)
-        add(inventory.property_raw_only_rows, raw_only)
-        add(inventory.named_raw_only_rows, pc.and_(raw_only, named))
-        add(inventory.unnamed_rows, unnamed)
-        add(inventory.unnamed_typed_rows, pc.and_(unnamed, typed))
-        add(inventory.unnamed_without_raw_rows, pc.and_(unnamed, pc.invert(has_raw)))
-
-        selected = batch.filter(pc.and_(unnamed, has_raw))
-        columns = selected.to_pydict()
-        for row in range(selected.num_rows):
-            group_path = columns["group_path"][row]
-            raw = columns["raw_bits"][row]
-            inventory.unnamed_raw_rows[build] += 1
-            bit_count = int(columns["bit_count"][row])
-            if len(raw) != (bit_count + 7) // 8:
-                inventory.unnamed_wrong_length_rows[build] += 1
-            inventory.unnamed_widths[build][bit_count] += 1
-            if bit_count % 8 == 0:
-                inventory.unnamed_byte_aligned_rows[build] += 1
-            if _payload_is_zero(raw, bit_count):
-                inventory.unnamed_zero_rows[build] += 1
-
-            handle = int(columns["handle"][row])
-            checksum = columns["compatible_checksum"][row]
-            if checksum is not None:
-                inventory.unnamed_checksum_rows[build] += 1
-            if handle == 2**32 - 1:
-                inventory.unnamed_sentinel_handle_rows[build] += 1
-            signature = (group_path, handle, checksum, bit_count)
-            recurrence = inventory.signatures.setdefault(signature, Recurrence())
-            recurrence.observe(raw, replay_ordinal, build)
-
-            block_key = (
-                int(columns["packet_id"][row]),
-                int(columns["channel_index"][row]),
-                int(columns["actor_net_guid"][row]),
-                columns["object_net_guid"][row],
-                group_path,
+    with pq.ParquetFile(fields_path, pre_buffer=False) as parquet:
+        missing = set(FIELD_COLUMNS) - set(parquet.schema_arrow.names)
+        if missing:
+            raise ValueError(
+                f"fields.parquet is missing {len(missing)} required column(s)"
             )
-            unnamed_blocks[block_key].append((handle, checksum, bit_count))
 
-    for block_key, fields in unnamed_blocks.items():
-        shape = (block_key[-1], tuple(fields))
-        recurrence = inventory.block_shapes.setdefault(shape, BlockRecurrence())
-        recurrence.observe(replay_ordinal, build)
+        # The adapter's key for one property update. Actor and object IDs group
+        # this replay only; never copied into Inventory, they cannot be reported.
+        unnamed_blocks: dict[
+            tuple[int, int, int, int | None, str],
+            list[tuple[int, int | None, int]],
+        ] = defaultdict(list)
 
-    inventory.replay_count += 1
-    inventory.build_replays[build] += 1
-    return build
+        def add(counter: Counter[str], mask) -> None:
+            counter[build] += pc.sum(pc.cast(mask, pa.int64())).as_py() or 0
+
+        def present(column):
+            # Decoded first: a dictionary column's null can sit in its values.
+            if pa.types.is_dictionary(column.type):
+                column = pc.cast(column, pa.string())
+            return pc.is_valid(column)
+
+        # Only unnamed property rows with a payload (under 0.2% of a 13.06 export)
+        # reach Python, in physical order; every other counter is an Arrow mask sum.
+        for batch in parquet.iter_batches(columns=list(FIELD_COLUMNS)):
+            group_paths = pc.cast(batch.column("group_path"), pa.string())
+            if group_paths.null_count:
+                raise ValueError("fields.parquet: null group_path")
+            inventory.field_rows[build] += batch.num_rows
+            prop = pc.invert(pc.match_substring(group_paths, CLASS_NET_CACHE_SUFFIX))
+            typed = present(batch.column(TYPED_COLUMNS[0]))
+            for name in TYPED_COLUMNS[1:]:
+                typed = pc.or_(typed, present(batch.column(name)))
+            named = present(batch.column("field_name"))
+            has_raw = present(batch.column("raw_bits"))
+            raw_only = pc.and_(prop, pc.and_(has_raw, pc.invert(typed)))
+            unnamed = pc.and_(prop, pc.invert(named))
+            add(inventory.property_rows, prop)
+            add(inventory.property_raw_only_rows, raw_only)
+            add(inventory.named_raw_only_rows, pc.and_(raw_only, named))
+            add(inventory.unnamed_rows, unnamed)
+            add(inventory.unnamed_typed_rows, pc.and_(unnamed, typed))
+            add(inventory.unnamed_without_raw_rows, pc.and_(unnamed, pc.invert(has_raw)))
+
+            selected = batch.filter(pc.and_(unnamed, has_raw))
+            columns = selected.to_pydict()
+            for row in range(selected.num_rows):
+                group_path = columns["group_path"][row]
+                raw = columns["raw_bits"][row]
+                inventory.unnamed_raw_rows[build] += 1
+                bit_count = int(columns["bit_count"][row])
+                if len(raw) != (bit_count + 7) // 8:
+                    inventory.unnamed_wrong_length_rows[build] += 1
+                inventory.unnamed_widths[build][bit_count] += 1
+                if bit_count % 8 == 0:
+                    inventory.unnamed_byte_aligned_rows[build] += 1
+                if _payload_is_zero(raw, bit_count):
+                    inventory.unnamed_zero_rows[build] += 1
+
+                handle = int(columns["handle"][row])
+                checksum = columns["compatible_checksum"][row]
+                if checksum is not None:
+                    inventory.unnamed_checksum_rows[build] += 1
+                if handle == 2**32 - 1:
+                    inventory.unnamed_sentinel_handle_rows[build] += 1
+                signature = (group_path, handle, checksum, bit_count)
+                recurrence = inventory.signatures.setdefault(signature, Recurrence())
+                recurrence.observe(raw, replay_ordinal, build)
+
+                block_key = (
+                    int(columns["packet_id"][row]),
+                    int(columns["channel_index"][row]),
+                    int(columns["actor_net_guid"][row]),
+                    columns["object_net_guid"][row],
+                    group_path,
+                )
+                unnamed_blocks[block_key].append((handle, checksum, bit_count))
+
+        for block_key, fields in unnamed_blocks.items():
+            shape = (block_key[-1], tuple(fields))
+            recurrence = inventory.block_shapes.setdefault(shape, BlockRecurrence())
+            recurrence.observe(replay_ordinal, build)
+
+        inventory.replay_count += 1
+        inventory.build_replays[build] += 1
+        return build
 
 
 def export_and_analyze(

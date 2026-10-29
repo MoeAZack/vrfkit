@@ -18,7 +18,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 
-from support import TempDirTestCase, run_cli
+from support import TempDirTestCase, retained_parquet_readers, run_cli
 import compare_rpc_params as guard
 
 
@@ -279,7 +279,11 @@ class RecordTests(FileTest):
 
     def test_two_invocations_at_one_identity_are_two_records(self):
         rows = [COMMON[1], COMMON[1]]
-        loaded = guard.load_rust_records(write_ours(self.dir / "f.parquet", rows))
+        ours = write_ours(self.dir / "f.parquet", rows)
+        with retained_parquet_readers() as readers:
+            loaded = guard.load_rust_records(ours)
+            self.assertTrue(readers)
+            self.assertTrue(all(reader.closed for reader in readers))
         self.assertEqual(len(loaded), 2)
         self.assertEqual(loaded[0], loaded[1])
 

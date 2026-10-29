@@ -51,6 +51,8 @@ SINK_ZERO = (
     # tail is a tally no measured build produces, so nonzero is a new shape.
     "cnc_bruteforce_payloads_unwalked",
     "movement_sized_section_tails", "movement_open_section_tails",
+    # A separate boundary: bits outside a fitting sized movement window.
+    "movement_sized_section_trailers", "movement_sized_section_trailer_bits",
 )
 #: Each sink event tally and the NetStats counter it must equal: vrf-net calls
 #: the sink beside its own increment, so a difference is broken bookkeeping.

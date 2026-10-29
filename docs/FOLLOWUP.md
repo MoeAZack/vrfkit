@@ -3,6 +3,15 @@
 The open work, the decisions deliberately not taken, and the one record the
 reference export lacks.
 
+## Recorded review findings
+
+[Pre-fix code review findings](CODE_REVIEW.md) preserves the fourteen findings
+from the 2026-10-16 review, with synthetic reproductions, observed behavior,
+fix acceptance criteria and the separate GitHub Issue/PR snapshot.
+Its [resolution ledger](CODE_REVIEW.md#resolution-ledger) records the F01--F14
+working-tree fixes, the separate Windows CI reader-lifetime fix, failing-before
+regressions, integrated checks and the remaining Windows/private-corpus limits.
+
 ## Remaining work
 
 - Establish meanings before adding typed fields or game-action labels: the

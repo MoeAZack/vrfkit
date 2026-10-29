@@ -14,10 +14,9 @@ import json
 from collections import Counter, defaultdict
 from pathlib import Path
 
-import pyarrow.parquet as pq
-
 from atomic_io import run_json_cli
 from player_identity import FINAL_PROVENANCE, load_player_bodies
+from wire_bits import read_parquet
 
 
 ACTOR_COLUMNS = ("time_ms", "packet_id", "channel_index", "actor_net_guid",
@@ -84,9 +83,9 @@ def build(export_dir: Path) -> dict:
     bodies = load_player_bodies(export_dir, manifest)
     players = bodies.subjects
     conflicting_player_guids = bodies.conflicts
-    actors = pq.read_table(export_dir / "actors.parquet",
+    actors = read_parquet(export_dir / "actors.parquet",
                            columns=list(ACTOR_COLUMNS)).to_pylist()
-    fields = pq.read_table(export_dir / "fields.parquet",
+    fields = read_parquet(export_dir / "fields.parquet",
                            columns=list(FIELD_COLUMNS),
                            filters=[("field_name", "in", ["Owner", "Instigator"])]
                            ).to_pylist()

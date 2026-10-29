@@ -81,6 +81,8 @@ pub struct RoundResult {
     pub winning_team_role: Option<AresTeamRole>,
     /// How the round ended.
     pub round_result: Option<AresRoundOutcome>,
+    /// Raw `WinningTeamMode` enum byte, declared from 13.09; its names are unknown.
+    pub winning_team_mode: Option<u8>,
 }
 
 /// Decode a `BombGameState.RoundResults` blob; see the module docs for
@@ -102,10 +104,13 @@ pub fn decode_round_results(
                 "WinningTeam" => row.winning_team = Some(read_fname::<StructBlobError>(sub, 1024)?),
                 "WinningTeamRole" => row.winning_team_role = Some(AresTeamRole::read(sub, name)?),
                 "RoundResult" => row.round_result = Some(AresRoundOutcome::read(sub, name)?),
-                // Opaque nested array at two handles, skipped EXPLICITLY: the
+                "WinningTeamMode" => {
+                    row.winning_team_mode = Some(read_narrow_byte(sub, name, CONTEXT)?);
+                }
+                // Opaque nested arrays, skipped EXPLICITLY: the
                 // consumption check would read a fall-through as a member that
                 // left its window unread.
-                "EliminatedTeams" => sub.skip_remaining(),
+                "EliminatedTeams" | "TeamResults" => sub.skip_remaining(),
                 _ => return Ok(None),
             }
             // `read_fname` is self-delimiting, `read_narrow_byte` takes the

@@ -268,25 +268,38 @@ def check_source_table_size() -> list[str]:
 TEST_COUNT_RE = re.compile(r"(\d[\d,]*)\s+(?:(Rust|Python)\s+)?(?:tests|passing)\b")
 
 
+def test_count_claims(text: str, platform: str | None = None) -> list[tuple[int, str, str]]:
+    """Suite counts, optionally scoped by a following platform qualifier.
+    Unqualified claims apply on every platform."""
+    claims = []
+    for i, line in enumerate(text.splitlines(), 1):
+        for match in TEST_COUNT_RE.finditer(line):
+            scope = re.match(r"\s+\((Windows|non-Windows)\)", line[match.end():])
+            if platform is None or scope is None or scope.group(1) == platform:
+                claims.append((i, match.group(1), match.group(2) or ""))
+    return claims
+
+
 def stale_test_counts(text: str, live: set[str],
-                      by_suite: dict[str, set[str]] | None = None) -> list[tuple[int, str]]:
+                      by_suite: dict[str, set[str]] | None = None, *,
+                      platform: str | None = None) -> list[tuple[int, str]]:
     """`(line number, quoted count)` for every suite-size claim not in `live`
     (both suites' counts in both spellings): presence is not agreement. A claim
     that names its suite must be that suite's, when `by_suite` gives it."""
     return [(i, quoted)
-            for i, line in enumerate(text.splitlines(), 1)
-            for quoted, suite in TEST_COUNT_RE.findall(line)
+            for i, quoted, suite in test_count_claims(text, platform)
             if quoted not in ((by_suite or {}).get(suite) or live)]
 
 
-def unquoted_test_counts(docs: dict[str, str], counts: dict[str, int]) -> list[str]:
+def unquoted_test_counts(docs: dict[str, str], counts: dict[str, int], *,
+                         platform: str | None = None) -> list[str]:
     """Each doc must quote each live suite size in a `TEST_COUNT_RE` claim, in
     either spelling; a longer number that contains it quotes nothing."""
     return [f"{name}: {label} test count is {count}, not quoted"
             for label, count in counts.items()
             for name, text in docs.items()
             if not any(q.replace(",", "") == str(count)
-                       for q, _suite in TEST_COUNT_RE.findall(text))]
+                       for _i, q, _suite in test_count_claims(text, platform))]
 
 
 def contradicting_test_counts(docs: dict[str, str]) -> list[str]:
@@ -297,20 +310,20 @@ def contradicting_test_counts(docs: dict[str, str]) -> list[str]:
     there are exactly two suites, so a third distinct value is a
     contradiction. Blind to a count wrong the same way everywhere.
     """
-    seen: list[tuple[str, int, str]] = [
-        (name, i, quoted)
-        for name, text in docs.items()
-        for i, line in enumerate(text.splitlines(), 1)
-        for quoted, _suite in TEST_COUNT_RE.findall(line)
-    ]
-    distinct = {quoted.replace(",", "") for _, _, quoted in seen}
-    if len(distinct) <= 2:
-        return []
-    sites = ", ".join(f"{name}:{i} says {quoted}" for name, i, quoted in seen)
-    return [
-        f"{len(distinct)} different test counts claimed but there are two "
-        f"suites, so at least one is stale -- {sites}"
-    ]
+    for platform in ("Windows", "non-Windows"):
+        seen = [
+            (name, i, quoted)
+            for name, text in docs.items()
+            for i, quoted, _suite in test_count_claims(text, platform)
+        ]
+        distinct = {quoted.replace(",", "") for _, _, quoted in seen}
+        if len(distinct) > 2:
+            sites = ", ".join(f"{name}:{i} says {quoted}" for name, i, quoted in seen)
+            return [
+                f"{len(distinct)} different test counts claimed for {platform} "
+                f"but there are two suites, so at least one is stale -- {sites}"
+            ]
+    return []
 
 
 #: Every doc this guard reads. README and USAGE must *quote* the live numbers;
@@ -804,7 +817,9 @@ def main() -> int:
 
     if not args.fast:
         rust, tools_n, run_problems = measure_tests()
-        run_problems += unquoted_test_counts(docs, {"rust": rust, "tools": tools_n})
+        platform = "Windows" if sys.platform == "win32" else "non-Windows"
+        run_problems += unquoted_test_counts(
+            docs, {"rust": rust, "tools": tools_n}, platform=platform)
         by_suite = {suite: {str(c), f"{c:,}"}
                     for suite, c in (("Rust", rust), ("Python", tools_n))}
         live = by_suite["Rust"] | by_suite["Python"]
@@ -812,8 +827,8 @@ def main() -> int:
             run_problems += [
                 f"{name}:{i}: says {quoted}; the suites are {rust} (Rust) "
                 f"and {tools_n} (Python)"
-                for i, quoted in stale_test_counts(text, live, by_suite)]
-        print(f"tests: rust {rust}, tools {tools_n}")
+                for i, quoted in stale_test_counts(text, live, by_suite, platform=platform)]
+        print(f"tests: rust {rust} ({platform}), tools {tools_n}")
         checks.append(run_problems)
     problems = [p for found in checks for p in found]
 

@@ -7,7 +7,7 @@ import json
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from support import TempDirTestCase, run_cli
+from support import TempDirTestCase, read_parquet, run_cli
 import extract_damage_events as damage
 
 POINT = "MulticastNotifyDamage_Point"
@@ -129,6 +129,6 @@ class ExtractDamageEventsTests(TempDirTestCase):
         self.write(invocation(100, WALL), [])
         code, stdout, out = self.run_main()
         self.assertEqual(code, 0)
-        self.assertEqual(pq.read_table(out).schema, damage.SCHEMA)
+        self.assertEqual(read_parquet(out).schema, damage.SCHEMA)
         for key in damage.COUNT_KEYS:
             self.assertIn(f"  {key}: ", stdout)

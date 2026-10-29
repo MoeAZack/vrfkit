@@ -706,6 +706,7 @@ impl ExportSink<'_> {
                                 ("WinningTeam", None, rr.winning_team),
                                 ("WinningTeamRole", None, role),
                                 ("RoundResult", None, outcome),
+                                ("WinningTeamMode", rr.winning_team_mode.map(i64::from), None),
                             ];
                             (rr.round_number, members)
                         })

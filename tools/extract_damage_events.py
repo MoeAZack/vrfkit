@@ -24,12 +24,11 @@ from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.compute as pc
-import pyarrow.parquet as pq
 
 from equippable_table import EQUIPPABLE_BY_PATH
 from extract_rounds import parquet_cli
 from player_identity import COUNT_KEYS as IDENTITY_KEYS, load_player_bodies
-from wire_bits import iter_selected, text
+from wire_bits import iter_selected, read_parquet, text
 
 FUNCTIONS = ("MulticastNotifyDamage_Point", "MulticastNotifyDamage_Base")
 #: Parameter -> (column, value column); vectors are "(x,y,z)" strings.
@@ -66,7 +65,7 @@ COUNT_KEYS = (*FUNCTIONS, "repeated-parameter splits", "sentinels nulled",
 
 def actor_classes(export: Path, counts: Counter) -> dict:
     """actor GUID -> class path from actors.parquet; a GUID opened as two classes maps to None."""
-    table = pq.read_table(export / "actors.parquet", columns=["actor_net_guid", "class_path"])
+    table = read_parquet(export / "actors.parquet", columns=["actor_net_guid", "class_path"])
     classes = {}
     for guid, path in zip(table.column("actor_net_guid").to_pylist(),
                           pc.cast(table.column("class_path"), pa.string()).to_pylist()):
@@ -149,7 +148,7 @@ def build(export: Path) -> tuple[list[dict], Counter, list[str]]:
     for r in rows:
         if r["killed"] and (r["victim_subject"] or r["victim_actor_net_guid"] in identity.conflicts):
             blows[r["victim_actor_net_guid"]].append(r["time_ms"])
-    for event in pq.read_table(export / "events.parquet", columns=["group", "time1", "word1"]).to_pylist():
+    for event in read_parquet(export / "events.parquet", columns=["group", "time1", "word1"]).to_pylist():
         if event["group"] == "characterDeath":
             deaths[event["word1"]].append(event["time1"])
     for victim in blows.keys() | deaths.keys():

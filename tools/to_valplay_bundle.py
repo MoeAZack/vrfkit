@@ -4,7 +4,7 @@ Writes the events.ndjson, movement.ndjson and manifest.json that valplay's
 compute_metrics.py consumes; only the serialization is bridged, no metric is
 reimplemented. Replicated properties group by (packet_id, actor, object,
 group_path) into export_group_received events; RPCs (group_path contains
-'_ClassNetCache') by (packet_id, actor, group_path, handle) into rpc_received.
+'_ClassNetCache') by (packet_id, actor, object, group_path, handle) into rpc_received.
 A shot RPC also becomes a valorant_shot_received event: its effect blobs are
 decoded with the manifest's gameplay-tag table, and the gun is the
 FiringState subobject's outer (net_guids.parquet) named from its class path
@@ -34,7 +34,6 @@ from typing import NamedTuple
 
 try:
     import pyarrow as pa
-    import pyarrow.parquet as pq
     import pyarrow.compute as pc
     import numpy
 except ImportError:
@@ -43,6 +42,7 @@ except ImportError:
 sys.path.insert(0, str(Path(__file__).parent))
 from equippable_table import EQUIPPABLE_BY_PATH  # noqa: E402
 from atomic_io import remove_tree, require_descendant  # noqa: E402
+from wire_bits import read_parquet  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -497,7 +497,7 @@ def _resolve_equippable(net_guid, guid_outer, guid_path, guid_class):
 def _load_net_guids(export_dir):
     """Read net_guids.parquet into (guid -> outer, guid -> path, row count);
     the count is the table's height, since both dicts drop rows."""
-    table = pq.read_table(export_dir / "net_guids.parquet")
+    table = read_parquet(export_dir / "net_guids.parquet")
     guids = table.column("net_guid").to_pylist()
     paths = table.column("path").cast("string").to_pylist()
     outers = table.column("outer_net_guid").to_pylist()
@@ -594,8 +594,8 @@ def _decode_effect_elements(data: bytes, bit_count: int, spec: _EffectArraySpec,
     """Decode one effect value array -> list of (tag_index, value) tuples.
 
     ``spec.read_value`` must raise on a short read, not return a sentinel:
-    the ``consumed``/``skip_bits`` resync relies on a failed read leaving the
-    earlier value untouched. An independent port of effect.rs over the raw
+    a failed read leaves the earlier value untouched. Each leaf reader ends
+    at its declared payload boundary. An independent port of effect.rs over the raw
     blob: where Rust rejects a blob whole, this keeps what it decoded and
     counts the two shapes that fabricate values downstream, a half-read pair
     (dropped by `_decode_effect_blob`) and any bit left after the loop.
@@ -640,20 +640,20 @@ def _decode_effect_elements(data: bytes, bit_count: int, spec: _EffectArraySpec,
                 break
             if payload_bits > r.bits_remaining():
                 break
-            start = r.tell()
+            # Share the bytes and absolute bit offsets, but not the array's end.
+            payload = _BitReader(data, r.tell() + payload_bits)
+            payload.skip_bits(r.tell())
+            r.skip_bits(payload_bits)
             if handle == spec.tag_handle:
                 try:
-                    tag = r.read_int_packed()
+                    tag = payload.read_int_packed()
                 except (EOFError, ValueError):
                     pass
             elif handle == spec.value_handle:
                 try:
-                    val = spec.read_value(r)
+                    val = spec.read_value(payload)
                 except (EOFError, ValueError):
                     pass
-            consumed = r.tell() - start
-            if consumed < payload_bits:
-                r.skip_bits(payload_bits - consumed)
         elements[idx] = (tag, val)
     # A declared slot missing either half, never visited or lost mid-read, is
     # a pair `_decode_effect_blob` drops.
@@ -1338,7 +1338,7 @@ def _load_field_columns(fields_path: Path, verbose: bool) -> _FieldColumns:
     t0 = time.time()
     if verbose:
         print("Loading fields.parquet...")
-    table = pq.read_table(fields_path)
+    table = read_parquet(fields_path)
     n_rows = len(table)
     if verbose:
         print(f"  {n_rows:,} rows loaded in {time.time()-t0:.1f}s")
@@ -1385,7 +1385,7 @@ def _group_rows(cols: _FieldColumns):
         if fn == UNRESOLVED_CLASS_NET_CACHE_PAYLOAD_FIELD_NAME:
             unresolved_cnc_rows += 1
         elif CLASS_NET_CACHE_SUFFIX in gp:
-            rpc_groups[(pid, actor, gp, handle)].append(i)
+            rpc_groups[(pid, actor, obj, gp, handle)].append(i)
         else:
             # Keyed by subobject too: a character's ItemSlot subobjects
             # would otherwise merge into one slot.
@@ -1460,7 +1460,7 @@ def _build_server_timeline_events(export_dir: Path, cols: "_FieldColumns",
     public enum constant and the tag/time tuple matches the measured layout.
     Returns ``(events, rows_read)``.
     """
-    table = pq.read_table(export_dir / "events.parquet")
+    table = read_parquet(export_dir / "events.parquet")
     groups = _dict_column_to_pylist(table.column("group"))
     time1 = _numeric_column_to_pylist(table.column("time1"))
     time2 = _numeric_column_to_pylist(table.column("time2"))
@@ -1528,7 +1528,7 @@ def _build_actor_events(export_dir: Path, verbose: bool, tally: "_Tally"):
     events = []
     guid_class = {}
     counts = Counter(dict.fromkeys(_ACTOR_EVENT_TYPES.values(), 0))
-    rows = pq.read_table(export_dir / "actors.parquet").to_pylist()
+    rows = read_parquet(export_dir / "actors.parquet").to_pylist()
     for row in rows:
         raw_event = row["event"]
         event_type = ("actor_spawned" if raw_event == "open"
@@ -1677,7 +1677,7 @@ def _build_rpc_events(cols: _FieldColumns, rpc_groups: dict,
     """rpc_received events, the shot first for a shot RPC:
     ``(events, shot_count, resolved_weapon_count)``.
 
-    Counted, not fixed: a function invoked TWICE by one actor in one packet
+    Counted, not fixed: a function invoked TWICE on one object in one packet
     is one group whose second call overwrites the first's parameters (nothing
     marks an invocation's end), and a group of only unnamed rows cannot name
     its function, so it is dropped whole.
@@ -1695,7 +1695,7 @@ def _build_rpc_events(cols: _FieldColumns, rpc_groups: dict,
     shot_count = 0
     resolved_weapon_count = 0
 
-    for (pid, actor, gp, handle), row_indices in rpc_groups.items():
+    for (pid, actor, obj, gp, handle), row_indices in rpc_groups.items():
         ms = col_time[row_indices[0]]
 
         rpc_name = None
@@ -1767,7 +1767,7 @@ def _build_rpc_events(cols: _FieldColumns, rpc_groups: dict,
             first = row_indices[0]
             shot_event = _build_shot_event(
                 shot_ctx, ms, pid, actor,
-                cols.obj[first] if cols.obj[first] is not None else actor,
+                obj,
                 cols.channel[first], payload,
                 _EffectBlobs(*map(effect_blobs.get, (
                     "FloatValues", "ObjectValues", "VectorValues"))),
@@ -1783,6 +1783,7 @@ def _build_rpc_events(cols: _FieldColumns, rpc_groups: dict,
             "time_ms": ms,
             "function_name": rpc_name,
             "actor_net_guid": actor,
+            "object_net_guid": obj,
             "payload": payload if payload else None,
         }
         events.append((pid, ms, event))
@@ -1853,7 +1854,7 @@ def _write_movement(movement_path: Path, output_dir: Path, verbose: bool) -> tup
     t0 = time.time()
     if verbose:
         print("Converting movement.parquet...")
-    mv_table = pq.read_table(movement_path, columns=list(_MOVEMENT_COLUMNS))
+    mv_table = read_parquet(movement_path, columns=list(_MOVEMENT_COLUMNS))
     n_mv = len(mv_table)
 
     # Declared non-null, and load-bearing: `to_numpy` turns a uint32 column

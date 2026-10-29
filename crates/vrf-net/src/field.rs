@@ -118,7 +118,9 @@ fn parse_rep_layout_impl(
         reader.read_bit()?;
 
         let mut remainder = RepLayoutRemainder::None;
-        while !reader.at_end() {
+        // Only a consumed zero handle terminates the stream; EOF at a record
+        // boundary must fail the next handle read, retaining emitted fields.
+        loop {
             // The handle and length bits die with an overrunning record, so an
             // abandon is charged from here, not from `bits_remaining`.
             let record_start = reader.position();
@@ -292,6 +294,19 @@ mod tests {
         let mut bits = vec![false]; // checksum
         bits.int_packed(0); // immediate terminator
         assert_eq!(walk_bits(&bits, None).0.unwrap(), (0, 0));
+    }
+
+    #[test]
+    fn rep_layout_checksum_only_requires_a_terminator() {
+        // Given: only the property checksum, with no encoded handle.
+        let bits = [false];
+
+        // When: walking the exact one-bit window.
+        let (result, sink) = walk_bits(&bits, None);
+
+        // Then: EOF is not a valid empty stream.
+        assert!(matches!(result, Err(NetError::Bit(_))));
+        assert!(sink.fields.is_empty());
     }
 
     #[test]
